@@ -91,7 +91,7 @@ td.r,th.r{text-align:right}
 .field{display:grid;gap:4px;flex:1;min-width:120px}
 .field input,.field select{width:100%;padding:11px 12px;border-radius:12px;border:2px solid var(--line);background:var(--bg);color:var(--ink);font:inherit;font-weight:700}
 .diff{border-radius:16px;padding:16px;text-align:center;display:grid;gap:4px}
-.diff b{font-family:var(--display);font-size:2rem}
+.diff b{font-family:var(--display);font-size:clamp(1.3rem,6vw,2rem)}
 .diff.ok{background:color-mix(in srgb,var(--good) 16%,transparent);color:var(--good)}
 .diff.bad{background:color-mix(in srgb,var(--bad) 14%,transparent);color:var(--bad)}
 .diff.plus{background:color-mix(in srgb,var(--warn) 18%,transparent);color:var(--warn)}
