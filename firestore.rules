@@ -29,13 +29,29 @@ service cloud.firestore {
       allow read: if isFamily();
       allow create: if isParent() || (isKid()
         && request.resource.data.keys().hasOnly(['itemId', 'name', 'emoji', 'price', 't', 'by', 'ticket', 'pay', 'promo'])
-        && (!('pay' in request.resource.data) || request.resource.data.pay in ['cash', 'transfer'])
+        && (!('pay' in request.resource.data) || request.resource.data.pay in ['cash', 'transfer', 'credit'])
         && request.resource.data.by == 'kid'
         && exists(/databases/$(database)/documents/items/$(request.resource.data.itemId))
         && (request.resource.data.price == item(request.resource.data.itemId).price
             || promoPriceOk(item(request.resource.data.itemId), request.resource.data.price)));
       allow update: if isParent();
       allow delete: if isParent() || (isKid() && resource.data.by == 'kid');
+    }
+
+    // Fiados: ventas que se pagan después. Macarena los anota y marca cuando pagan (💵 o 📱).
+    // Solo los papás confirman transferencias ('ok'), corrigen o borran.
+    match /debts/{id} {
+      allow read: if isFamily();
+      allow create: if isParent() || (isKid()
+        && request.resource.data.keys().hasOnly(['name', 'total', 'items', 't', 'by', 'paid'])
+        && request.resource.data.by == 'kid' && request.resource.data.paid == false
+        && request.resource.data.name is string && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 30
+        && request.resource.data.total is int && request.resource.data.total >= 0);
+      allow update: if isParent() || (isKid()
+        && resource.data.paid == false && request.resource.data.paid == true
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['paid', 'paidAt', 'paidWith'])
+        && request.resource.data.paidWith in ['cash', 'transfer']);
+      allow delete: if isParent() || (isKid() && resource.data.by == 'kid' && resource.data.paid == false);
     }
 
     // Turno (sencillo inicial, hora de apertura): Macarena solo lo ve.
