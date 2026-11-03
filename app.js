@@ -55,7 +55,7 @@ const dt = t => new Date(t).toLocaleString('es-CO', { weekday:'short', day:'nume
 const hr = t => new Date(t).toLocaleTimeString('es-CO', { hour:'numeric', minute:'2-digit' });
 const num = v => Math.max(0, Math.round(Number(String(v).replace(/[^\d]/g, '')) || 0));
 
-let mode = 'kid', tab = 'hoy', editing = null, confirmKey = null, counted = '', den = {}, note = '';
+let mode = 'kid', tab = 'hoy', editing = null, confirmKey = null, counted = '', den = {}, note = '', inv = {};
 let loginWho = null, loginErr = '', loginBusy = false, fatal = '';
 const app = document.getElementById('app');
 
@@ -145,7 +145,7 @@ function activate(r) {
   stopListening();
   role = r; user = sessions[r]; db = dbFor(r); fatal = '';
   mode = r === 'parent' ? 'parent' : 'kid'; tab = 'hoy'; editing = null; confirmKey = null;
-  counted = ''; den = {}; note = '';
+  counted = ''; den = {}; note = ''; inv = {};
   lsSet(LAST_KEY, r); screen = 'app'; loadCart();
   listen(); render(); scrollTo(0, 0);
 }
@@ -442,6 +442,19 @@ function pHoy() {
       <span class="row" style="gap:4px;flex-wrap:nowrap"><b class="num">${fmt(total(g.sales))}</b><button data-delticket="${esc(g.id)}">Borrar</button></span></div>`).join('') : '<p class="muted">Sin ventas.</p>'}
   </div>`;
 }
+// Conteo de inventario: compara lo que la app espera que quede con lo que hay en físico.
+// Si hay menos dulces de los esperados, salieron sin anotarse en la app.
+function invRows() {
+  return S.items.filter(i => inv[i.id] !== undefined && inv[i.id] !== '').map(i => {
+    const real = Number(inv[i.id]) || 0, expected = i.stock;
+    return { itemId: i.id, name: i.name, emoji: i.emoji, price: i.price, expected, counted: real, missing: expected - real };
+  });
+}
+function invSummary(rows) {
+  const miss = rows.filter(r => r.missing > 0), extra = rows.filter(r => r.missing < 0);
+  return { rows, missUnits: miss.reduce((a, r) => a + r.missing, 0), missValue: miss.reduce((a, r) => a + r.missing * r.price, 0),
+    extraUnits: extra.reduce((a, r) => a - r.missing, 0), counted: rows.length };
+}
 function pCierre() {
   const sales = total(S.sales), base = turn().base || 0, expected = base + sales, c = countedValue();
   let cls = 'none', title = 'Escribe cuánta plata hay', sub = '';
@@ -465,7 +478,18 @@ function pCierre() {
     </details>
   </div>
   <div class="card">
-    <h2>3. Resultado</h2>
+    <h2>3. Cuenta los dulces <span class="muted" style="font-size:.9rem">(recomendado)</span></h2>
+    <p class="muted" style="margin:0">Cuenta cuántos quedan de verdad de cada dulce. Si hay menos de lo que dice la app, se vendieron sin anotarse.</p>
+    ${(() => { const su = invSummary(invRows());
+      return `<div class="invlist">${S.items.map(i => { const v = inv[i.id], has = v !== undefined && v !== '', m = has ? i.stock - (Number(v) || 0) : 0;
+        return `<div class="inv"><span class="inv-n">${esc(i.emoji)} ${esc(i.name)}<small class="muted num">La app dice: ${i.stock}</small></span>
+          <input id="inv-${i.id}" data-inv="${i.id}" inputmode="numeric" value="${esc(v ?? '')}" placeholder="—" aria-label="Cuántos ${esc(i.name)} hay">
+          <span class="inv-d num ${!has ? '' : m > 0 ? 'bad' : m < 0 ? 'warn' : 'ok'}">${!has ? '' : m > 0 ? `Faltan ${m}` : m < 0 ? `Sobran ${-m}` : '✓'}</span></div>`; }).join('')}</div>
+      ${su.counted ? `<div class="diff ${su.missUnits ? 'bad' : 'ok'}"><b class="num">${su.missUnits ? `Faltan ${su.missUnits} dulces = ${fmt(su.missValue)}` : 'Los dulces cuadran'}</b>
+        <span>${su.missUnits ? 'Salieron dulces que no se anotaron en la app (o se regalaron o dañaron).' : `Contaste ${su.counted} de ${S.items.length} dulces.`}${su.extraUnits ? ` Hay ${su.extraUnits} de más: revisa si llegaron dulces que no se anotaron.` : ''}</span></div>` : ''}`; })()}
+  </div>
+  <div class="card">
+    <h2>4. Resultado</h2>
     <div class="tw"><table><tbody>
       <tr><td>Ventas del turno (${S.sales.length} dulces)</td><td class="r num">${fmt(sales)}</td></tr>
       <tr><td>+ Sencillo inicial</td><td class="r num">${fmt(base)}</td></tr>
@@ -522,16 +546,20 @@ function pHist() {
   const cl = S.closings;
   if (!cl.length) return '<div class="card"><h2>Historial de cierres</h2><p class="muted">Aquí quedan guardados los cierres de caja. Todavía no hay ninguno.</p></div>';
   const tot = cl.reduce((a, c) => a + c.sales, 0), diffs = cl.reduce((a, c) => a + (c.counted - c.expected), 0);
+  const missV = cl.reduce((a, c) => a + (c.missValue || 0), 0), missU = cl.reduce((a, c) => a + (c.missUnits || 0), 0);
   return `<div class="card"><div class="kpis">
     <div class="kpi"><span class="lbl">Vendido en total</span><b class="num">${fmt(tot)}</b></div>
-    <div class="kpi"><span class="lbl">Diferencias</span><b class="num" style="color:${diffs === 0 ? 'var(--good)' : diffs < 0 ? 'var(--bad)' : 'var(--warn)'}">${diffs > 0 ? '+' : ''}${fmt(diffs).replace('$-', '-$')}</b></div></div></div>
+    <div class="kpi"><span class="lbl">Diferencias</span><b class="num" style="color:${diffs === 0 ? 'var(--good)' : diffs < 0 ? 'var(--bad)' : 'var(--warn)'}">${diffs > 0 ? '+' : ''}${fmt(diffs).replace('$-', '-$')}</b></div>
+    <div class="kpi" style="grid-column:1/-1"><span class="lbl">Dulces que faltaron en los conteos</span><b class="num" style="color:${missU ? 'var(--bad)' : 'var(--good)'}">${missU ? `${missU} = ${fmt(missV)}` : '0'}</b></div></div></div>
   <div class="card"><h2>Cierres</h2>${cl.slice().reverse().map(c => { const d = c.counted - c.expected;
     return `<details class="hist"><summary><span>${esc(dt(c.end))}<br><small class="muted num">${c.count} dulces · ${fmt(c.sales)}</small></span>
-      <span class="pill ${d === 0 ? '' : d < 0 ? 'out' : 'low'} num">${d === 0 ? 'Cuadró' : d < 0 ? 'Faltó ' + fmt(-d) : 'Sobró ' + fmt(d)}</span></summary>
+      <span style="display:grid;gap:4px;justify-items:end"><span class="pill ${d === 0 ? '' : d < 0 ? 'out' : 'low'} num">${d === 0 ? 'Plata cuadró' : d < 0 ? 'Faltó ' + fmt(-d) : 'Sobró ' + fmt(d)}</span>
+      ${c.inventory ? `<span class="pill ${c.missUnits ? 'out' : ''} num">${c.missUnits ? `Faltaron ${c.missUnits} dulces (${fmt(c.missValue)})` : 'Dulces cuadraron'}</span>` : ''}</span></summary>
       <div class="tw"><table><tbody>
       <tr><td>Sencillo inicial</td><td class="r num">${fmt(c.base)}</td></tr><tr><td>Debía haber</td><td class="r num">${fmt(c.expected)}</td></tr>
       <tr><td>Se contó</td><td class="r num">${fmt(c.counted)}</td></tr>
       ${(c.items || []).map(r => `<tr><td class="muted">${esc(r.emoji)} ${esc(r.name)} × ${r.qty}</td><td class="r num muted">${fmt(r.sum)}</td></tr>`).join('')}
+      ${(c.inventory || []).filter(r => r.missing).map(r => `<tr><td style="color:${r.missing > 0 ? 'var(--bad)' : 'var(--warn)'}">${esc(r.emoji)} ${esc(r.name)}: la app decía ${r.expected}, había ${r.counted}</td><td class="r num" style="color:${r.missing > 0 ? 'var(--bad)' : 'var(--warn)'}">${r.missing > 0 ? '-' + fmt(r.missing * r.price) : '+' + (-r.missing)}</td></tr>`).join('')}
       </tbody></table></div>${c.note ? `<p class="muted">Nota: ${esc(c.note)}</p>` : ''}</details>`; }).join('')}</div>`;
 }
 
@@ -655,11 +683,15 @@ app.addEventListener('click', e => {
   if (t.id === 'doclose') {
     const sales = total(S.sales), base = turn().base || 0;
     const b = writeBatch(db);
-    b.set(doc(closingsCol()), { start: turn().start, end: Date.now(), base, sales, expected: base + sales, counted: countedValue() || 0, count: S.sales.length, items: byItem(S.sales), note });
+    const su = invSummary(invRows());
+    b.set(doc(closingsCol()), { start: turn().start, end: Date.now(), base, sales, expected: base + sales, counted: countedValue() || 0, count: S.sales.length, items: byItem(S.sales), note,
+      ...(su.counted ? { inventory: su.rows, missUnits: su.missUnits, missValue: su.missValue } : {}) });
+    // El inventario de la app queda igual a lo contado.
+    su.rows.forEach(r => { if (r.missing !== 0) b.update(doc(db, 'items', r.itemId), { stock: r.counted }); });
     S.sales.forEach(s => b.delete(doc(db, 'sales', s.id)));
     b.set(turnDoc(), { start: Date.now(), base: 0 });
     commit(b, 'Caja cerrada y guardada');
-    counted = ''; den = {}; note = ''; confirmKey = null; tab = 'historial'; render(); return;
+    counted = ''; den = {}; note = ''; inv = {}; confirmKey = null; tab = 'historial'; render(); return;
   }
   // dulces
   if (t.id === 'add') { editing = { id: null, name: '', emoji: '🍬', price: 500, color: COLORS[S.items.length % COLORS.length], stock: 10, active: true }; confirmKey = null; render(); scrollTo(0, 0); return; }
@@ -711,6 +743,7 @@ app.addEventListener('input', e => {
     clearTimeout(baseT); baseT = setTimeout(() => { const b = writeBatch(db); b.set(turnDoc(), { base: v }, { merge: true }); commit(b); }, 600);
   }
   if (t.id === 'note') { note = t.value; }
+  if (t.dataset.inv) { inv[t.dataset.inv] = t.value.replace(/[^\d]/g, ''); refresh(); }
   if (t.id === 'e-emoji') { const v = t.value.trim(); if (v && editing) { editing.emoji = v; app.querySelectorAll('[data-emoji]').forEach(b => b.setAttribute('aria-pressed', b.dataset.emoji === v)); } }
 });
 app.addEventListener('change', e => { if (e.target.id === 'sound') { sound = e.target.checked; try { localStorage.setItem(SOUND_KEY, sound ? '1' : '0'); } catch (err) {} } });

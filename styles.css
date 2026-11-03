@@ -173,3 +173,13 @@ textarea{width:100%;min-height:110px;border-radius:12px;border:2px solid var(--l
 .partybox h2{font-size:2rem;color:var(--good)}
 .partybox b{font-family:var(--display);font-size:2.4rem}
 .partybox span{font-size:1.6rem}
+
+/* ---------- Conteo de dulces ---------- */
+.invlist{display:grid}
+.inv{display:grid;grid-template-columns:1fr 72px 78px;gap:8px;align-items:center;padding-block:6px;border-bottom:1px solid var(--line)}
+.inv:last-child{border-bottom:0}
+.inv-n{display:grid;font-weight:800;min-width:0}
+.inv-n small{font-weight:700}
+.inv input{width:100%;padding:9px 8px;border-radius:12px;border:2px solid var(--line);background:var(--bg);color:var(--ink);font:inherit;font-weight:800;text-align:center}
+.inv-d{font-weight:800;font-size:.85rem;text-align:right}
+.inv-d.bad{color:var(--bad)} .inv-d.warn{color:var(--warn)} .inv-d.ok{color:var(--good)}
