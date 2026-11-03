@@ -6,6 +6,11 @@ service cloud.firestore {
     function isParent() { return request.auth != null && request.auth.token.email == 'papas@tienda.app'; }
     function isKid() { return request.auth != null && request.auth.token.email == 'macarena@tienda.app'; }
     function isFamily() { return isParent() || isKid(); }
+    // Precio de promo ("2 por $800"): cada unidad sale a 800/2, redondeado (puede sumar 1 peso para cuadrar).
+    function promoPriceOk(it, p) {
+      return it.get('promoQty', null) is int && it.promoQty >= 2 && it.get('promoPrice', null) is int
+        && p >= math.floor(it.promoPrice / it.promoQty) && p <= math.floor(it.promoPrice / it.promoQty) + 1;
+    }
     function item(id) { return get(/databases/$(database)/documents/items/$(id)).data; }
 
     // Dulces: los papás hacen todo. Macarena solo puede bajar el inventario al cobrar (o subirlo de a 1).
@@ -23,11 +28,12 @@ service cloud.firestore {
     match /sales/{id} {
       allow read: if isFamily();
       allow create: if isParent() || (isKid()
-        && request.resource.data.keys().hasOnly(['itemId', 'name', 'emoji', 'price', 't', 'by', 'ticket', 'pay'])
+        && request.resource.data.keys().hasOnly(['itemId', 'name', 'emoji', 'price', 't', 'by', 'ticket', 'pay', 'promo'])
         && (!('pay' in request.resource.data) || request.resource.data.pay in ['cash', 'transfer'])
         && request.resource.data.by == 'kid'
         && exists(/databases/$(database)/documents/items/$(request.resource.data.itemId))
-        && request.resource.data.price == item(request.resource.data.itemId).price);
+        && (request.resource.data.price == item(request.resource.data.itemId).price
+            || promoPriceOk(item(request.resource.data.itemId), request.resource.data.price)));
       allow update: if isParent();
       allow delete: if isParent() || (isKid() && resource.data.by == 'kid');
     }
