@@ -718,7 +718,7 @@ function pAjustes() {
     ${confirmKey === 'restore' ? `<span class="confirm">Se reemplaza todo con el texto. <button class="btn danger" id="restoreyes">Sí, restaurar</button><button class="btn ghost" data-cancel>No</button></span>` : '<button class="btn ghost" id="restore">Restaurar desde el texto</button>'}</div>
   </div>
   <div class="card"><h2>Empezar de cero</h2>
-    ${confirmKey === 'reset' ? `<div class="confirm">Se borra todo: productos, ventas e historial, en los dos celulares. <button class="btn danger" id="resetyes">Sí, borrar todo</button><button class="btn ghost" data-cancel>No</button></div>` : '<button class="btn danger" id="reset">Borrar todos los datos</button>'}
+    ${confirmKey === 'reset' ? `<div class="confirm">Se borran los productos, las ventas y el historial, en los dos celulares. La tienda queda vacía. <button class="btn danger" id="resetyes">Sí, borrar todo</button><button class="btn ghost" data-cancel>No</button></div>` : '<p class="muted" style="margin:0">Úsalo después de practicar: borra los productos de ejemplo, las ventas y los cierres de práctica. La tienda queda vacía para poner los productos reales.</p><button class="btn danger" id="reset">Borrar todos los datos</button>'}
   </div>
   <div class="card"><h2>Face ID o huella</h2>
     ${lockOf('parent') ? `<p class="muted" style="margin:0">Activado: para entrar al modo papás desde el inicio, el celular pide Face ID, huella o su clave.</p>
@@ -865,7 +865,7 @@ app.addEventListener('click', e => {
       err => { console.error(err); toast('No se pudieron pasar los datos'); }); return; }
   if (t.id === 'reset') { confirmKey = 'reset'; render(); return; }
   if (t.id === 'resetyes') { confirmKey = null; counted = ''; den = {}; render(); toast('Borrando…');
-    replaceAll(null, true).then(() => toast('Todo borrado'), err => { console.error(err); toast('No se pudo borrar'); }); return; }
+    replaceAll({ items: [], closings: [], turn: { start: Date.now(), base: 0 } }).then(() => toast('Todo borrado. Ya pueden poner los productos reales.'), err => { console.error(err); toast('No se pudo borrar'); }); return; }
 });
 let pendingRestore = null;
 function readForm() {
