@@ -266,7 +266,7 @@ const turn = () => S.turn || { start: Date.now(), base: 0 };
 const ready = () => S.loaded.items && S.loaded.sales && S.loaded.turn;
 
 // ---------- INICIO / LOGIN ----------
-const WHO = { kid: { icon: '👧', name: 'Soy Macarena', sub: 'Para vender en la tienda' }, parent: { icon: '👪', name: 'Somos los papás', sub: 'Dulces, precios, cierres e historial' } };
+const WHO = { kid: { icon: '👧', name: 'Soy Macarena', sub: 'Para vender en la tienda' }, parent: { icon: '👪', name: 'Somos los papás', sub: 'Productos, precios, cierres e historial' } };
 function renderHome() {
   app.innerHTML = `
   <div class="login">
@@ -369,18 +369,18 @@ function renderKid() {
       ${c ? `<span class="cnt num">${c}</span>` : ''}
       ${low ? `<span class="low">Quedan ${left}</span>` : ''}
       <span class="em">${pic(i)}</span><span class="nm">${esc(i.name)}</span><span class="pr num">${fmt(i.price)}</span></button>`; }).join('')}
-    ${items.length ? '' : '<p class="muted">No hay dulces todavía. Los papás los agregan desde su celular.</p>'}
+    ${items.length ? '' : '<p class="muted">No hay productos todavía. Los papás los agregan desde su celular.</p>'}
   </div>
   <div class="bar cart"><div class="bar-in">
     ${ci.length ? `
-      <div class="cart-head"><b>🛒 Venta ${nT + 1}</b><span class="muted">Toca un dulce de aquí para quitarlo</span></div>
+      <div class="cart-head"><b>🛒 Venta ${nT + 1}</b><span class="muted">Toca uno de aquí para quitarlo</span></div>
       <div class="chips">${ci.map((i, n) => `<button class="chip" data-unpick="${n}" style="--c:${esc(i.color)}" aria-label="Quitar ${esc(i.name)}">${pic(i)}<small>✕</small></button>`).join('')}</div>
       <div class="cart-foot">
         <button class="clearcart" id="clearcart" aria-label="Borrar esta venta">🗑️</button>
         <div class="money"><small>Total</small><b class="num">${fmt(cartTotal())}</b></div>
         <button class="pay" id="pay">✅ Cobrar</button>
       </div>`
-    : `<div class="cart-empty">🛒 <span>Toca los dulces que te compran</span></div>`}
+    : `<div class="cart-empty">🛒 <span>Toca lo que te compran</span></div>`}
   </div></div>`;
 }
 function pick(id, el) {
@@ -453,7 +453,7 @@ function countedValue() { return counted === '' ? null : Number(counted) || 0; }
 function denTotal() { return DENOMS.reduce((a, d) => a + d * (den[d] || 0), 0); }
 
 function renderParent() {
-  const tabs = [['hoy','Ventas de hoy'],['cierre','Cerrar caja'],['dulces','Dulces'],['historial','Historial'],['ajustes','Ajustes']];
+  const tabs = [['hoy','Ventas de hoy'],['cierre','Cerrar caja'],['dulces','Productos'],['historial','Historial'],['ajustes','Ajustes']];
   app.innerHTML = `
   <div class="ptop"><h1>Modo papás</h1><div class="row" style="flex-wrap:nowrap"><button class="btn" id="tokid">Ver la tienda</button><button class="lockbtn" id="home" aria-label="Inicio: cambiar de usuario">🏠</button></div></div>
   <div class="tabs" role="tablist">${tabs.map(([k, l]) => `<button role="tab" aria-selected="${tab === k}" data-tab="${k}">${l}</button>`).join('')}</div>
@@ -466,19 +466,19 @@ function pHoy() {
   <div class="card">
     <div class="lbl">Turno abierto desde ${esc(dt(turn().start))}</div>
     <div class="kpis"><div class="kpi"><span class="lbl">Vendido</span><b class="num">${fmt(sum)}</b></div>
-    <div class="kpi"><span class="lbl">Ventas · dulces</span><b class="num">${tk.length} · ${sales.length}</b></div>
+    <div class="kpi"><span class="lbl">Ventas · productos</span><b class="num">${tk.length} · ${sales.length}</b></div>
     <div class="kpi"><span class="lbl">💵 Efectivo</span><b class="num">${fmt(cashTotal(sales))}</b></div>
     <div class="kpi"><span class="lbl">📱 Transferencias</span><b class="num">${fmt(transferTotal(sales))}</b>
       ${pendingTransfers(sales).length ? `<small class="warnt">${pendingTransfers(sales).length} por confirmar</small>` : ''}</div></div>
     <button class="btn big" data-tab="cierre">Cerrar caja</button>
   </div>
-  <div class="card"><h2>Por dulce</h2>
-    ${rows.length ? `<div class="tw"><table><thead><tr><th>Dulce</th><th class="r">Cant.</th><th class="r">Total</th></tr></thead><tbody>
+  <div class="card"><h2>Por producto</h2>
+    ${rows.length ? `<div class="tw"><table><thead><tr><th>Producto</th><th class="r">Cant.</th><th class="r">Total</th></tr></thead><tbody>
     ${rows.map(r => `<tr><td>${esc(r.emoji)} ${esc(r.name)}</td><td class="r num">${r.qty}</td><td class="r num">${fmt(r.sum)}</td></tr>`).join('')}
     </tbody></table></div>` : '<p class="muted">Todavía no hay ventas en este turno.</p>'}
   </div>
   <div class="card"><h2>Cada venta</h2>
-    <p class="muted" style="margin:0">Si una venta quedó mal, bórrala aquí. Los dulces vuelven al inventario.</p>
+    <p class="muted" style="margin:0">Si una venta quedó mal, bórrala aquí. Los productos vuelven al inventario.</p>
     ${tk.length ? tk.map((g, n) => ({ g, n: n + 1 })).reverse().map(({ g, n }) => `<div class="sale"><span><b>Venta ${n}</b> ${payOf(g.sales[0]) === 'transfer' ? '📱' : '💵'} <span class="muted num">· ${hr(g.t)}${g.by === 'parent' ? ' · papás' : ''}</span><br>${g.sales.map(s => esc(s.emoji)).join(' ')}</span>
       <span class="row" style="gap:4px;flex-wrap:nowrap">${payOf(g.sales[0]) === 'transfer' ? transferBtn(g) : ''}<b class="num">${fmt(total(g.sales))}</b><button data-delticket="${esc(g.id)}">Borrar</button></span></div>`).join('') : '<p class="muted">Sin ventas.</p>'}
   </div>`;
@@ -503,7 +503,7 @@ function pCierre() {
   if (c !== null) { const d = c - expected;
     if (d === 0) { cls = 'ok'; title = '¡Cuadra perfecto!'; sub = 'La plata coincide con las ventas.'; }
     else if (d < 0) { cls = 'bad'; title = 'Falta ' + fmt(-d); sub = 'Hay menos plata de la esperada. Revisa la lista de ventas.'; }
-    else { cls = 'plus'; title = 'Sobra ' + fmt(d); sub = 'Hay más plata. Puede ser un dulce que no se marcó.'; } }
+    else { cls = 'plus'; title = 'Sobra ' + fmt(d); sub = 'Hay más plata. Puede ser un producto que no se marcó.'; } }
   return `
   <div class="card">
     <h2>1. Sencillo inicial</h2>
@@ -530,20 +530,20 @@ function pCierre() {
     : '<p class="muted" style="margin:0">No hubo transferencias en este turno.</p>'}
   </div>
   <div class="card">
-    <h2>4. Cuenta los dulces <span class="muted" style="font-size:.9rem">(recomendado)</span></h2>
-    <p class="muted" style="margin:0">Cuenta cuántos quedan de verdad de cada dulce. Si hay menos de lo que dice la app, se vendieron sin anotarse.</p>
+    <h2>4. Cuenta los productos <span class="muted" style="font-size:.9rem">(recomendado)</span></h2>
+    <p class="muted" style="margin:0">Cuenta cuántos quedan de verdad de cada producto. Si hay menos de lo que dice la app, se vendieron sin anotarse.</p>
     ${(() => { const su = invSummary(invRows());
       return `<div class="invlist">${S.items.map(i => { const v = inv[i.id], has = v !== undefined && v !== '', m = has ? i.stock - (Number(v) || 0) : 0;
         return `<div class="inv"><span class="inv-n">${esc(i.emoji)} ${esc(i.name)}<small class="muted num">La app dice: ${i.stock}</small></span>
           <input id="inv-${i.id}" data-inv="${i.id}" inputmode="numeric" value="${esc(v ?? '')}" placeholder="—" aria-label="Cuántos ${esc(i.name)} hay">
           <span class="inv-d num ${!has ? '' : m > 0 ? 'bad' : m < 0 ? 'warn' : 'ok'}">${!has ? '' : m > 0 ? `Faltan ${m}` : m < 0 ? `Sobran ${-m}` : '✓'}</span></div>`; }).join('')}</div>
-      ${su.counted ? `<div class="diff ${su.missUnits ? 'bad' : 'ok'}"><b class="num">${su.missUnits ? `Faltan ${su.missUnits} dulces = ${fmt(su.missValue)}` : 'Los dulces cuadran'}</b>
-        <span>${su.missUnits ? 'Salieron dulces que no se anotaron en la app (o se regalaron o dañaron).' : `Contaste ${su.counted} de ${S.items.length} dulces.`}${su.extraUnits ? ` Hay ${su.extraUnits} de más: revisa si llegaron dulces que no se anotaron.` : ''}</span></div>` : ''}`; })()}
+      ${su.counted ? `<div class="diff ${su.missUnits ? 'bad' : 'ok'}"><b class="num">${su.missUnits ? `Faltan ${su.missUnits} productos = ${fmt(su.missValue)}` : 'Los productos cuadran'}</b>
+        <span>${su.missUnits ? 'Salieron productos que no se anotaron en la app (o se regalaron o dañaron).' : `Contaste ${su.counted} de ${S.items.length} productos.`}${su.extraUnits ? ` Hay ${su.extraUnits} de más: revisa si llegaron productos que no se anotaron.` : ''}</span></div>` : ''}`; })()}
   </div>
   <div class="card">
     <h2>5. Resultado</h2>
     <div class="tw"><table><tbody>
-      <tr><td>Ventas del turno (${S.sales.length} dulces)</td><td class="r num">${fmt(sales)}</td></tr>
+      <tr><td>Ventas del turno (${S.sales.length} productos)</td><td class="r num">${fmt(sales)}</td></tr>
       <tr><td class="muted">− 📱 Pagadas por transferencia</td><td class="r num muted">${fmt(tr)}</td></tr>
       <tr><td>💵 Ventas en efectivo</td><td class="r num">${fmt(cash)}</td></tr>
       <tr><td>+ Sencillo inicial</td><td class="r num">${fmt(base)}</td></tr>
@@ -560,7 +560,7 @@ function pCierre() {
 
 function itemForm(it) {
   return `<div class="card" id="editor">
-    <h2>${it.id ? 'Editar dulce' : 'Nuevo dulce'}</h2>
+    <h2>${it.id ? 'Editar producto' : 'Nuevo producto'}</h2>
     <div class="row">
       <div class="field"><label class="lbl" for="e-name">Nombre</label><input id="e-name" value="${esc(it.name)}" maxlength="22"></div>
       <div class="field"><label class="lbl" for="e-price">Precio</label><input id="e-price" inputmode="numeric" value="${it.price || ''}"></div>
@@ -628,19 +628,19 @@ function bulkPreview(text) {
   const { rows, bad } = parseBulk(text);
   if (!rows.length && !bad.length) return '<p class="muted">Aquí vas a ver cómo quedan antes de guardar.</p>';
   const nNew = rows.filter(r => !r.ex).length, nOld = rows.length - nNew;
-  return `<p><b>${nNew ? `${nNew} dulce${nNew === 1 ? '' : 's'} nuevo${nNew === 1 ? '' : 's'}` : ''}${nNew && nOld ? ' y ' : ''}${nOld ? `${nOld} que ya existe${nOld === 1 ? '' : 'n'} (se actualiza${nOld === 1 ? '' : 'n'})` : ''}</b></p>
+  return `<p><b>${nNew ? `${nNew} producto${nNew === 1 ? '' : 's'} nuevo${nNew === 1 ? '' : 's'}` : ''}${nNew && nOld ? ' y ' : ''}${nOld ? `${nOld} que ya existe${nOld === 1 ? '' : 'n'} (se actualiza${nOld === 1 ? '' : 'n'})` : ''}</b></p>
   ${rows.map((r, i) => `<div class="item"><div class="sw" style="--c:${r.ex ? esc(r.ex.color) : COLORS[(S.items.length + i) % COLORS.length]}">${r.ex && r.ex.photo ? pic(r.ex) : esc(r.emoji)}</div>
     <div class="t"><b>${esc(r.name)}</b><small class="num">${fmt(r.price)} · ${r.ex ? (r.stock !== null ? `ya existe: tenía ${r.ex.stock}, ahora ${r.ex.stock + r.stock}` : `ya existe: quedan ${r.ex.stock} und.`) : `${r.stock ?? 0} und.`}</small></div></div>`).join('')}
   ${bad.length ? `<div class="warnt">No entendí ${bad.length === 1 ? 'esta línea' : 'estas líneas'} (falta el nombre o el precio):<br>${bad.map(b => `<small>Línea ${b.n}: ${esc(b.line.slice(0, 40))}</small>`).join('<br>')}</div>` : ''}`;
 }
 function bulkSave(text) {
-  const { rows } = parseBulk(text); if (!rows.length) { toast('Escribe al menos un dulce con su precio'); return; }
+  const { rows } = parseBulk(text); if (!rows.length) { toast('Escribe al menos un producto con su precio'); return; }
   let k = 0; const base = Date.now();
   const ops = rows.map(r => r.ex
     ? b => b.update(doc(db, 'items', r.ex.id), { price: r.price, ...(r.stock !== null ? { stock: increment(r.stock) } : {}) })
     : b => b.set(doc(itemsCol()), { name: r.name, emoji: r.emoji, price: r.price, color: COLORS[(S.items.length + k++) % COLORS.length], stock: r.stock ?? 0, active: true, example: false, order: base + k }));
   bulk = null; render();
-  runOps(ops).then(() => toast(`Listo: ${rows.length} dulce${rows.length === 1 ? '' : 's'} guardado${rows.length === 1 ? '' : 's'}`),
+  runOps(ops).then(() => toast(`Listo: ${rows.length} producto${rows.length === 1 ? '' : 's'} guardado${rows.length === 1 ? '' : 's'}`),
     err => { console.error(err); toast('No se pudo guardar. Revisa el internet.'); });
 }
 let bulk = null;
@@ -649,16 +649,16 @@ function pDulces() {
   return `
   ${editing ? itemForm(editing) : ''}
   ${bulk !== null ? `<div class="card" id="bulk">
-    <h2>Agregar varios dulces</h2>
-    <p class="muted">Escribe un dulce por línea: <b>nombre, precio, unidades</b>. También puedes pegar las columnas desde Excel o Google Sheets.</p>
+    <h2>Agregar varios productos</h2>
+    <p class="muted">Escribe un producto por línea: <b>nombre, precio, unidades</b>. También puedes pegar las columnas desde Excel o Google Sheets.</p>
     <textarea id="bulktext" rows="7" placeholder="Chupeta, 500, 20&#10;Chocolatina, 1500, 12&#10;Gomitas, 300, 30">${esc(bulk)}</textarea>
     <div id="bulkprev">${bulkPreview(bulk)}</div>
     <div class="row"><button class="btn" id="bulksave">Guardar todos</button><button class="btn ghost" id="bulkcancel">Cancelar</button></div>
   </div>` : ''}
-  ${ex ? `<div class="card" style="background:var(--soft)"><b>Estos son dulces de ejemplo.</b><span class="muted">Cambia nombres y precios por los reales, o bórralos todos y agrega los tuyos.</span>
-    ${confirmKey === 'clear' ? `<div class="confirm">¿Borrar todos los dulces de ejemplo? <button class="btn danger" id="clearyes">Sí, borrar</button><button class="btn ghost" data-cancel>No</button></div>` : '<button class="btn ghost" id="clear">Borrar los de ejemplo</button>'}</div>` : ''}
+  ${ex ? `<div class="card" style="background:var(--soft)"><b>Estos son productos de ejemplo.</b><span class="muted">Cambia nombres y precios por los reales, o bórralos todos y agrega los tuyos.</span>
+    ${confirmKey === 'clear' ? `<div class="confirm">¿Borrar todos los productos de ejemplo? <button class="btn danger" id="clearyes">Sí, borrar</button><button class="btn ghost" data-cancel>No</button></div>` : '<button class="btn ghost" id="clear">Borrar los de ejemplo</button>'}</div>` : ''}
   <div class="card">
-    <div class="row" style="justify-content:space-between"><h2>${S.items.length} dulces</h2><div class="row"><button class="btn ghost" id="bulk-open">+ Agregar varios</button><button class="btn" id="add">+ Agregar dulce</button></div></div>
+    <div class="row" style="justify-content:space-between"><h2>${S.items.length} productos</h2><div class="row"><button class="btn ghost" id="bulk-open">+ Agregar varios</button><button class="btn" id="add">+ Agregar producto</button></div></div>
     <div>${S.items.map(i => { const st = i.stock < 0 ? `<span class="pill out">Se vendieron ${-i.stock} de más: actualiza las unidades</span>` : i.stock === 0 ? '<span class="pill out">Agotado</span>' : i.stock <= 3 ? `<span class="pill low">Quedan ${i.stock}</span>` : `<span class="pill">${i.stock} und.</span>`;
       return `<div class="item"><div class="sw" style="--c:${esc(i.color)}">${pic(i)}</div>
       <div class="t"><b>${esc(i.name)}${i.active === false ? ' <span class="pill">oculto</span>' : ''}</b><small class="num">${fmt(i.price)} · </small>${st}</div>
@@ -674,12 +674,12 @@ function pHist() {
   return `<div class="card"><div class="kpis">
     <div class="kpi"><span class="lbl">Vendido en total</span><b class="num">${fmt(tot)}</b></div>
     <div class="kpi"><span class="lbl">Diferencias</span><b class="num" style="color:${diffs === 0 ? 'var(--good)' : diffs < 0 ? 'var(--bad)' : 'var(--warn)'}">${diffs > 0 ? '+' : ''}${fmt(diffs).replace('$-', '-$')}</b></div>
-    <div class="kpi" style="grid-column:1/-1"><span class="lbl">Dulces que faltaron en los conteos</span><b class="num" style="color:${missU ? 'var(--bad)' : 'var(--good)'}">${missU ? `${missU} = ${fmt(missV)}` : '0'}</b></div></div></div>
+    <div class="kpi" style="grid-column:1/-1"><span class="lbl">Productos que faltaron en los conteos</span><b class="num" style="color:${missU ? 'var(--bad)' : 'var(--good)'}">${missU ? `${missU} = ${fmt(missV)}` : '0'}</b></div></div></div>
   <div class="card"><h2>Cierres</h2>${cl.slice().reverse().map(c => { const d = c.counted - c.expected;
-    return `<details class="hist"><summary><span>${esc(dt(c.end))}<br><small class="muted num">${c.count} dulces · ${fmt(c.sales)}</small></span>
+    return `<details class="hist"><summary><span>${esc(dt(c.end))}<br><small class="muted num">${c.count} productos · ${fmt(c.sales)}</small></span>
       <span style="display:grid;gap:4px;justify-items:end"><span class="pill ${d === 0 ? '' : d < 0 ? 'out' : 'low'} num">${d === 0 ? 'Plata cuadró' : d < 0 ? 'Faltó ' + fmt(-d) : 'Sobró ' + fmt(d)}</span>
       ${c.transferPending ? `<span class="pill out num">Transferencias sin confirmar ${fmt(c.transferPending)}</span>` : ''}
-      ${c.inventory ? `<span class="pill ${c.missUnits ? 'out' : ''} num">${c.missUnits ? `Faltaron ${c.missUnits} dulces (${fmt(c.missValue)})` : 'Dulces cuadraron'}</span>` : ''}</span></summary>
+      ${c.inventory ? `<span class="pill ${c.missUnits ? 'out' : ''} num">${c.missUnits ? `Faltaron ${c.missUnits} productos (${fmt(c.missValue)})` : 'Productos cuadraron'}</span>` : ''}</span></summary>
       <div class="tw"><table><tbody>
       ${c.transferSales !== undefined ? `<tr><td>💵 Efectivo</td><td class="r num">${fmt(c.cashSales)}</td></tr><tr><td>📱 Transferencias${c.transferPending ? ` <span style="color:var(--bad)">(sin confirmar ${fmt(c.transferPending)})</span>` : ''}</td><td class="r num">${fmt(c.transferSales)}</td></tr>` : ''}
       <tr><td>Sencillo inicial</td><td class="r num">${fmt(c.base)}</td></tr><tr><td>Debía haber en la caja</td><td class="r num">${fmt(c.expected)}</td></tr>
@@ -704,7 +704,7 @@ function pAjustes() {
   const old = oldLocalData();
   return `
   ${old ? `<div class="card" style="background:var(--soft)"><h2>Datos de la versión anterior</h2>
-    <p class="muted" style="margin:0">Este celular tiene datos guardados de la app anterior (${old.items.length} dulces, ${(old.closings || []).length} cierres). Puedes pasarlos a la app nueva. Esto reemplaza lo que hay ahora.</p>
+    <p class="muted" style="margin:0">Este celular tiene datos guardados de la app anterior (${old.items.length} productos, ${(old.closings || []).length} cierres). Puedes pasarlos a la app nueva. Esto reemplaza lo que hay ahora.</p>
     ${confirmKey === 'import' ? `<div class="confirm">¿Reemplazar los datos actuales con los de este celular? <button class="btn danger" id="importyes">Sí, pasar datos</button><button class="btn ghost" data-cancel>No</button></div>` : '<button class="btn" id="import">Pasar datos a la app nueva</button>'}
   </div>` : ''}
   <div class="card"><h2>Sonido</h2><label class="row"><input type="checkbox" id="sound" ${sound ? 'checked' : ''}> Sonar al vender (en este celular)</label></div>
@@ -715,7 +715,7 @@ function pAjustes() {
     ${confirmKey === 'restore' ? `<span class="confirm">Se reemplaza todo con el texto. <button class="btn danger" id="restoreyes">Sí, restaurar</button><button class="btn ghost" data-cancel>No</button></span>` : '<button class="btn ghost" id="restore">Restaurar desde el texto</button>'}</div>
   </div>
   <div class="card"><h2>Empezar de cero</h2>
-    ${confirmKey === 'reset' ? `<div class="confirm">Se borra todo: dulces, ventas e historial, en los dos celulares. <button class="btn danger" id="resetyes">Sí, borrar todo</button><button class="btn ghost" data-cancel>No</button></div>` : '<button class="btn danger" id="reset">Borrar todos los datos</button>'}
+    ${confirmKey === 'reset' ? `<div class="confirm">Se borra todo: productos, ventas e historial, en los dos celulares. <button class="btn danger" id="resetyes">Sí, borrar todo</button><button class="btn ghost" data-cancel>No</button></div>` : '<button class="btn danger" id="reset">Borrar todos los datos</button>'}
   </div>
   <div class="card"><h2>Face ID o huella</h2>
     ${lockOf('parent') ? `<p class="muted" style="margin:0">Activado: para entrar al modo papás desde el inicio, el celular pide Face ID, huella o su clave.</p>
@@ -737,7 +737,7 @@ async function replaceAll(d, seed) {
   if (seed) { ops.push(...sampleOps()); ops.push(b => b.set(turnDoc(), { start: Date.now(), base: 0 })); }
   else {
     (d.items || []).forEach((i, n) => ops.push(b => b.set(doc(db, 'items', String(i.id || uid())), {
-      name: String(i.name || 'Dulce'), emoji: String(i.emoji || '🍬'), price: num(i.price), color: String(i.color || COLORS[n % COLORS.length]),
+      name: String(i.name || 'Producto'), emoji: String(i.emoji || '🍬'), price: num(i.price), color: String(i.color || COLORS[n % COLORS.length]),
       stock: Math.round(Number(i.stock) || 0), photo: typeof i.photo === 'string' && i.photo.startsWith('data:image/') ? i.photo : null, active: i.active !== false, example: !!i.example, order: typeof i.order === 'number' ? i.order : n })));
     const t = d.turn || {};
     (t.sales || []).forEach(s => ops.push(b => b.set(doc(db, 'sales', String(s.id || uid())), {
@@ -837,9 +837,9 @@ app.addEventListener('click', e => {
   if (t.dataset.color) { readForm(); editing.color = t.dataset.color; render(); return; }
   if (t.id === 'e-cancel') { editing = null; confirmKey = null; render(); return; }
   if (t.id === 'e-del') { readForm(); confirmKey = 'del'; render(); return; }
-  if (t.id === 'e-del-yes') { const b = writeBatch(db); b.delete(doc(db, 'items', editing.id)); commit(b, 'Dulce borrado'); editing = null; confirmKey = null; render(); return; }
+  if (t.id === 'e-del-yes') { const b = writeBatch(db); b.delete(doc(db, 'items', editing.id)); commit(b, 'Producto borrado'); editing = null; confirmKey = null; render(); return; }
   if (t.id === 'e-save') { readForm();
-    if (!editing.name.trim()) { toast('Ponle un nombre al dulce'); return; }
+    if (!editing.name.trim()) { toast('Ponle un nombre al producto'); return; }
     const data = { name: editing.name.trim(), emoji: editing.emoji || '🍬', photo: editing.photo || null, price: editing.price, color: editing.color, stock: editing.stock + num(editing.add), active: editing.active, example: false };
     const b = writeBatch(db);
     if (editing.id) b.update(doc(db, 'items', editing.id), data);
