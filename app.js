@@ -349,10 +349,11 @@ function renderKid() {
   </div>
   <div class="today"><span>☀️ Hoy vendiste</span><b class="num">${fmt(total(S.sales))}</b><small>${nT} ${nT === 1 ? 'venta' : 'ventas'}</small></div>
   <div class="grid kidgrid">${items.map(i => {
-    const c = inCart(i.id), left = i.stock - c, out = left <= 0, low = !out && left <= 3;
-    return `<button class="candy${out ? ' out' : ''}${c ? ' picked' : ''}" data-sell="${i.id}" style="--c:${esc(i.color)}" aria-label="Agregar ${esc(i.name)} de ${fmt(i.price)}">
+    // Siempre se puede vender: el inventario es solo una guía (si dice 0 pero hay en físico, igual se vende).
+    const c = inCart(i.id), left = i.stock - c, low = left > 0 && left <= 3;
+    return `<button class="candy${c ? ' picked' : ''}" data-sell="${i.id}" style="--c:${esc(i.color)}" aria-label="Agregar ${esc(i.name)} de ${fmt(i.price)}">
       ${c ? `<span class="cnt num">${c}</span>` : ''}
-      ${out ? `<span class="low">${i.stock <= 0 ? 'Se acabó' : 'No hay más'}</span>` : low ? `<span class="low">Quedan ${left}</span>` : ''}
+      ${low ? `<span class="low">Quedan ${left}</span>` : ''}
       <span class="em">${esc(i.emoji)}</span><span class="nm">${esc(i.name)}</span><span class="pr num">${fmt(i.price)}</span></button>`; }).join('')}
     ${items.length ? '' : '<p class="muted">No hay dulces todavía. Los papás los agregan desde su celular.</p>'}
   </div>
@@ -370,7 +371,6 @@ function renderKid() {
 }
 function pick(id, el) {
   const it = itemById(id); if (!it) return;
-  if (it.stock - inCart(id) <= 0) { toast(`No quedan más ${it.name}`); return; }
   const r = el.getBoundingClientRect();
   cart.push(id); saveCart(); ding(); renderKid();
   const f = document.createElement('div'); f.className = 'fly'; f.textContent = '+' + fmt(it.price);
@@ -511,7 +511,7 @@ function pDulces() {
     ${confirmKey === 'clear' ? `<div class="confirm">¿Borrar todos los dulces de ejemplo? <button class="btn danger" id="clearyes">Sí, borrar</button><button class="btn ghost" data-cancel>No</button></div>` : '<button class="btn ghost" id="clear">Borrar los de ejemplo</button>'}</div>` : ''}
   <div class="card">
     <div class="row" style="justify-content:space-between"><h2>${S.items.length} dulces</h2><button class="btn" id="add">+ Agregar dulce</button></div>
-    <div>${S.items.map(i => { const st = i.stock <= 0 ? '<span class="pill out">Agotado</span>' : i.stock <= 3 ? `<span class="pill low">Quedan ${i.stock}</span>` : `<span class="pill">${i.stock} und.</span>`;
+    <div>${S.items.map(i => { const st = i.stock < 0 ? `<span class="pill out">Se vendieron ${-i.stock} de más: actualiza las unidades</span>` : i.stock === 0 ? '<span class="pill out">Agotado</span>' : i.stock <= 3 ? `<span class="pill low">Quedan ${i.stock}</span>` : `<span class="pill">${i.stock} und.</span>`;
       return `<div class="item"><div class="sw" style="--c:${esc(i.color)}">${esc(i.emoji)}</div>
       <div class="t"><b>${esc(i.name)}${i.active === false ? ' <span class="pill">oculto</span>' : ''}</b><small class="num">${fmt(i.price)} · </small>${st}</div>
       <button class="btn ghost" data-edit="${i.id}">Editar</button></div>`; }).join('')}</div>
