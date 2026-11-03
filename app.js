@@ -567,14 +567,80 @@ function itemForm(it) {
     </div>
   </div>`;
 }
+
+// ---------- agregar varios dulces de una vez ----------
+// Un dulce por línea: "Chupeta, 500, 20". Sirve pegar desde Excel o Google Sheets (columnas) o desde una nota.
+const KEYEMOJI = [
+  [/chupet|bon ?bon|bombom|paleta(?! de agua)|lollipop/, '🍭'], [/chocola|jet|jumbo|cocosette|chocorramo/, '🍫'],
+  [/galle|oreo|festival|wafer|tosh/, '🍪'], [/gomit|goma|trululu|ositos/, '🐻'], [/masmelo|malvavisc/, '🍡'],
+  [/chicle|bubbalo|trident/, '🫧'], [/paleta de agua|hielo|raspado|granizado/, '🍧'], [/helad|cono/, '🍦'],
+  [/ponque|ponqué|cupcake|muffin|brownie|torta|pastel/, '🧁'], [/rosquill|dona|donut/, '🍩'], [/mani|maní/, '🥜'],
+  [/crispeta|palomit|popcorn/, '🍿'], [/jugo|hit|tutti|frutiño/, '🧃'], [/gaseosa|cola|soda|agua|bebida|pony|malta/, '🥤'],
+  [/coca?da|coco/, '🥥'], [/bocadillo|miel|arequipe|dulce de leche|panela/, '🍯'], [/papa|chito|detodito|boliqueso|snack|tostacos|doritos/, '🥨'],
+  [/fresa|barrilete/, '🍓'], [/cereza/, '🍒'], [/limon|limón|menta/, '🍋'], [/sandia|patilla/, '🍉'], [/banano|plátano|platano/, '🍌'],
+  [/arepa|empanada|pan/, '🥐'], [/caramel|bianchi|colombina|dulce|confite|menta/, '🍬']
+];
+const plain = s => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim();
+function guessEmoji(name) { const n = plain(name); for (const [re, e] of KEYEMOJI) if (re.test(n)) return e; return '🍬'; }
+function parseBulk(text) {
+  const rows = [], bad = [], seen = new Map();
+  text.split(/\r?\n/).forEach((raw, ix) => {
+    const line = raw.trim(); if (!line) return;
+    let parts = line.includes('\t') ? line.split('\t') : line.includes(';') ? line.split(';') : line.split(',');
+    parts = parts.map(x => x.trim()).filter(Boolean);
+    if (parts.length < 2) { // "Chupeta 500 20" (separado con espacios)
+      const m = line.match(/^(.*?)\s+\$?\s*([\d.]+)(?:\s+(\d+))?\s*(?:und\.?|unidades)?$/i);
+      parts = m ? [m[1], m[2], m[3]].filter(x => x !== undefined) : parts;
+    }
+    let name = (parts[0] || '').replace(/^["']|["']$/g, '').trim(), emoji = '';
+    const em = name.match(/^(\p{Extended_Pictographic}(?:️|‍\p{Extended_Pictographic})*)\s*/u);
+    if (em) { emoji = em[1]; name = name.slice(em[0].length).trim(); }
+    const price = num(parts[1]), stock = parts[2] !== undefined && /\d/.test(parts[2]) ? num(parts[2]) : null;
+    if (!name || !price) { bad.push({ n: ix + 1, line }); return; }
+    name = name.slice(0, 22);
+    const key = plain(name);
+    if (seen.has(key)) { const r = seen.get(key); r.price = price; if (stock !== null) r.stock = (r.stock || 0) + stock; return; }
+    const ex = S.items.find(i => plain(i.name) === key);
+    const r = { name, price, stock, emoji: emoji || (ex ? ex.emoji : guessEmoji(name)), ex };
+    seen.set(key, r); rows.push(r);
+  });
+  return { rows, bad };
+}
+function bulkPreview(text) {
+  const { rows, bad } = parseBulk(text);
+  if (!rows.length && !bad.length) return '<p class="muted">Aquí vas a ver cómo quedan antes de guardar.</p>';
+  const nNew = rows.filter(r => !r.ex).length, nOld = rows.length - nNew;
+  return `<p><b>${nNew ? `${nNew} dulce${nNew === 1 ? '' : 's'} nuevo${nNew === 1 ? '' : 's'}` : ''}${nNew && nOld ? ' y ' : ''}${nOld ? `${nOld} que ya existe${nOld === 1 ? '' : 'n'} (se actualiza${nOld === 1 ? '' : 'n'})` : ''}</b></p>
+  ${rows.map((r, i) => `<div class="item"><div class="sw" style="--c:${r.ex ? esc(r.ex.color) : COLORS[(S.items.length + i) % COLORS.length]}">${esc(r.emoji)}</div>
+    <div class="t"><b>${esc(r.name)}</b><small class="num">${fmt(r.price)} · ${r.ex ? (r.stock !== null ? `ya existe: tenía ${r.ex.stock}, ahora ${r.ex.stock + r.stock}` : `ya existe: quedan ${r.ex.stock} und.`) : `${r.stock ?? 0} und.`}</small></div></div>`).join('')}
+  ${bad.length ? `<div class="warnt">No entendí ${bad.length === 1 ? 'esta línea' : 'estas líneas'} (falta el nombre o el precio):<br>${bad.map(b => `<small>Línea ${b.n}: ${esc(b.line.slice(0, 40))}</small>`).join('<br>')}</div>` : ''}`;
+}
+function bulkSave(text) {
+  const { rows } = parseBulk(text); if (!rows.length) { toast('Escribe al menos un dulce con su precio'); return; }
+  let k = 0; const base = Date.now();
+  const ops = rows.map(r => r.ex
+    ? b => b.update(doc(db, 'items', r.ex.id), { price: r.price, ...(r.stock !== null ? { stock: increment(r.stock) } : {}) })
+    : b => b.set(doc(itemsCol()), { name: r.name, emoji: r.emoji, price: r.price, color: COLORS[(S.items.length + k++) % COLORS.length], stock: r.stock ?? 0, active: true, example: false, order: base + k }));
+  bulk = null; render();
+  runOps(ops).then(() => toast(`Listo: ${rows.length} dulce${rows.length === 1 ? '' : 's'} guardado${rows.length === 1 ? '' : 's'}`),
+    err => { console.error(err); toast('No se pudo guardar. Revisa el internet.'); });
+}
+let bulk = null;
 function pDulces() {
   const ex = S.items.some(i => i.example);
   return `
   ${editing ? itemForm(editing) : ''}
+  ${bulk !== null ? `<div class="card" id="bulk">
+    <h2>Agregar varios dulces</h2>
+    <p class="muted">Escribe un dulce por línea: <b>nombre, precio, unidades</b>. También puedes pegar las columnas desde Excel o Google Sheets.</p>
+    <textarea id="bulktext" rows="7" placeholder="Chupeta, 500, 20&#10;Chocolatina, 1500, 12&#10;Gomitas, 300, 30">${esc(bulk)}</textarea>
+    <div id="bulkprev">${bulkPreview(bulk)}</div>
+    <div class="row"><button class="btn" id="bulksave">Guardar todos</button><button class="btn ghost" id="bulkcancel">Cancelar</button></div>
+  </div>` : ''}
   ${ex ? `<div class="card" style="background:var(--soft)"><b>Estos son dulces de ejemplo.</b><span class="muted">Cambia nombres y precios por los reales, o bórralos todos y agrega los tuyos.</span>
     ${confirmKey === 'clear' ? `<div class="confirm">¿Borrar todos los dulces de ejemplo? <button class="btn danger" id="clearyes">Sí, borrar</button><button class="btn ghost" data-cancel>No</button></div>` : '<button class="btn ghost" id="clear">Borrar los de ejemplo</button>'}</div>` : ''}
   <div class="card">
-    <div class="row" style="justify-content:space-between"><h2>${S.items.length} dulces</h2><button class="btn" id="add">+ Agregar dulce</button></div>
+    <div class="row" style="justify-content:space-between"><h2>${S.items.length} dulces</h2><div class="row"><button class="btn ghost" id="bulk-open">+ Agregar varios</button><button class="btn" id="add">+ Agregar dulce</button></div></div>
     <div>${S.items.map(i => { const st = i.stock < 0 ? `<span class="pill out">Se vendieron ${-i.stock} de más: actualiza las unidades</span>` : i.stock === 0 ? '<span class="pill out">Agotado</span>' : i.stock <= 3 ? `<span class="pill low">Quedan ${i.stock}</span>` : `<span class="pill">${i.stock} und.</span>`;
       return `<div class="item"><div class="sw" style="--c:${esc(i.color)}">${esc(i.emoji)}</div>
       <div class="t"><b>${esc(i.name)}${i.active === false ? ' <span class="pill">oculto</span>' : ''}</b><small class="num">${fmt(i.price)} · </small>${st}</div>
@@ -711,7 +777,7 @@ app.addEventListener('click', e => {
   if (role !== 'parent') return; // de aquí en adelante, solo papás
   if (t.id === 'toparent') { mode = 'parent'; render(); scrollTo(0, 0); return; }
   if (t.id === 'tokid') { mode = 'kid'; editing = null; confirmKey = null; render(); scrollTo(0, 0); return; }
-  if (t.dataset.tab) { tab = t.dataset.tab; editing = null; confirmKey = null; render(); scrollTo(0, 0); return; }
+  if (t.dataset.tab) { tab = t.dataset.tab; editing = null; bulk = null; confirmKey = null; render(); scrollTo(0, 0); return; }
   if (t.hasAttribute('data-cancel')) { confirmKey = null; render(); return; }
   if (t.dataset.okticket) {
     const g = tickets(S.sales).find(x => x.id === t.dataset.okticket); if (!g) return;
@@ -743,7 +809,10 @@ app.addEventListener('click', e => {
     counted = ''; den = {}; note = ''; inv = {}; confirmKey = null; tab = 'historial'; render(); return;
   }
   // dulces
-  if (t.id === 'add') { editing = { id: null, name: '', emoji: '🍬', price: 500, color: COLORS[S.items.length % COLORS.length], stock: 10, active: true }; confirmKey = null; render(); scrollTo(0, 0); return; }
+  if (t.id === 'bulk-open') { bulk = ''; editing = null; confirmKey = null; render(); scrollTo(0, 0); const ta = document.getElementById('bulktext'); ta && ta.focus(); return; }
+  if (t.id === 'bulkcancel') { bulk = null; render(); return; }
+  if (t.id === 'bulksave') { bulkSave(bulk || ''); return; }
+  if (t.id === 'add') { bulk = null; editing = { id: null, name: '', emoji: '🍬', price: 500, color: COLORS[S.items.length % COLORS.length], stock: 10, active: true }; confirmKey = null; render(); scrollTo(0, 0); return; }
   if (t.dataset.edit) { editing = { ...itemById(t.dataset.edit) }; confirmKey = null; render(); scrollTo(0, 0); return; }
   if (t.dataset.emoji) { readForm(); editing.emoji = t.dataset.emoji; render(); return; }
   if (t.dataset.color) { readForm(); editing.color = t.dataset.color; render(); return; }
@@ -792,6 +861,7 @@ app.addEventListener('input', e => {
     clearTimeout(baseT); baseT = setTimeout(() => { const b = writeBatch(db); b.set(turnDoc(), { base: v }, { merge: true }); commit(b); }, 600);
   }
   if (t.id === 'note') { note = t.value; }
+  if (t.id === 'bulktext') { bulk = t.value; const p = document.getElementById('bulkprev'); if (p) p.innerHTML = bulkPreview(bulk); }
   if (t.dataset.inv) { inv[t.dataset.inv] = t.value.replace(/[^\d]/g, ''); refresh(); }
   if (t.id === 'e-emoji') { const v = t.value.trim(); if (v && editing) { editing.emoji = v; app.querySelectorAll('[data-emoji]').forEach(b => b.setAttribute('aria-pressed', b.dataset.emoji === v)); } }
 });
