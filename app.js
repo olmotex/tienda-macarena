@@ -49,6 +49,20 @@ try { sound = localStorage.getItem(SOUND_KEY) !== '0'; } catch (e) {}
 
 const fmt = n => '$' + Math.round(n).toLocaleString('es-CO');
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+// Foto o dibujo del dulce
+const pic = i => i && i.photo && /^data:image\/(jpeg|png|webp);base64,/.test(i.photo) ? `<img class="ph" src="${i.photo}" alt="">` : esc(i ? i.emoji : '🍬');
+// Achica la foto a un cuadrado de 240 px (unos 20 KB) para que cargue rápido y quepa en Firebase.
+function shrinkPhoto(file) {
+  return new Promise((res, rej) => {
+    const url = URL.createObjectURL(file), im = new Image();
+    im.onload = () => { const S2 = 240, c = document.createElement('canvas'); c.width = c.height = S2;
+      const m = Math.min(im.naturalWidth, im.naturalHeight), x = (im.naturalWidth - m) / 2, y = (im.naturalHeight - m) / 2;
+      const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, S2, S2); g.drawImage(im, x, y, m, m, 0, 0, S2, S2);
+      URL.revokeObjectURL(url); res(c.toDataURL('image/jpeg', .72)); };
+    im.onerror = () => { URL.revokeObjectURL(url); rej(new Error('img')); };
+    im.src = url;
+  });
+}
 const itemById = id => S.items.find(i => i.id === id);
 const total = sales => sales.reduce((a, s) => a + s.price, 0);
 const dt = t => new Date(t).toLocaleString('es-CO', { weekday:'short', day:'numeric', month:'short', hour:'numeric', minute:'2-digit' });
@@ -354,13 +368,13 @@ function renderKid() {
     return `<button class="candy${c ? ' picked' : ''}" data-sell="${i.id}" style="--c:${esc(i.color)}" aria-label="Agregar ${esc(i.name)} de ${fmt(i.price)}">
       ${c ? `<span class="cnt num">${c}</span>` : ''}
       ${low ? `<span class="low">Quedan ${left}</span>` : ''}
-      <span class="em">${esc(i.emoji)}</span><span class="nm">${esc(i.name)}</span><span class="pr num">${fmt(i.price)}</span></button>`; }).join('')}
+      <span class="em">${pic(i)}</span><span class="nm">${esc(i.name)}</span><span class="pr num">${fmt(i.price)}</span></button>`; }).join('')}
     ${items.length ? '' : '<p class="muted">No hay dulces todavía. Los papás los agregan desde su celular.</p>'}
   </div>
   <div class="bar cart"><div class="bar-in">
     ${ci.length ? `
       <div class="cart-head"><b>🛒 Venta ${nT + 1}</b><span class="muted">Toca un dulce de aquí para quitarlo</span></div>
-      <div class="chips">${ci.map((i, n) => `<button class="chip" data-unpick="${n}" style="--c:${esc(i.color)}" aria-label="Quitar ${esc(i.name)}">${esc(i.emoji)}<small>✕</small></button>`).join('')}</div>
+      <div class="chips">${ci.map((i, n) => `<button class="chip" data-unpick="${n}" style="--c:${esc(i.color)}" aria-label="Quitar ${esc(i.name)}">${pic(i)}<small>✕</small></button>`).join('')}</div>
       <div class="cart-foot">
         <button class="clearcart" id="clearcart" aria-label="Borrar esta venta">🗑️</button>
         <div class="money"><small>Total</small><b class="num">${fmt(cartTotal())}</b></div>
@@ -406,7 +420,7 @@ function pay(method) {
   commit(b);
   cart = []; saveCart(); cashSound(); renderKid();
   const o = document.createElement('div'); o.className = 'overlay party';
-  o.innerHTML = `<div class="partybox"><div class="big">🎉</div><h2>¡Venta lista!</h2><b class="num">${fmt(sum)}</b><span>${method === 'transfer' ? '📱 Transferencia' : '💵 Billetes'}</span><span>${ci.map(i => esc(i.emoji)).join(' ')}</span></div>`;
+  o.innerHTML = `<div class="partybox"><div class="big">🎉</div><h2>¡Venta lista!</h2><b class="num">${fmt(sum)}</b><span>${method === 'transfer' ? '📱 Transferencia' : '💵 Billetes'}</span><span class="partyem">${ci.map(i => pic(i)).join(' ')}</span></div>`;
   o.addEventListener('click', () => o.remove()); document.body.appendChild(o); setTimeout(() => o.remove(), 1800);
 }
 function cashSound() {
@@ -555,7 +569,11 @@ function itemForm(it) {
       <div class="field"><label class="lbl" for="e-stock">Unidades en la tienda</label><input id="e-stock" inputmode="numeric" value="${it.stock ?? 0}"></div>
       <div class="field"><label class="lbl" for="e-add">Llegaron más (sumar)</label><input id="e-add" inputmode="numeric" placeholder="0" value="${esc(it.add || '')}"></div>
     </div>
-    <span class="lbl">Dibujo</span>
+    <span class="lbl">Foto o dibujo</span>
+    <div class="photorow"><div class="sw big" style="--c:${esc(it.color)}">${pic(it)}</div>
+      <label class="btn ghost photobtn">📷 ${it.photo ? 'Cambiar foto' : 'Tomar o escoger foto'}<input type="file" id="e-photo" accept="image/*" hidden></label>
+      ${it.photo ? '<button type="button" class="btn ghost" id="e-nophoto">Quitar foto</button>' : ''}</div>
+    <small class="muted">${it.photo ? 'Si tocas un dibujo, se quita la foto.' : 'O escoge un dibujo:'}</small>
     <div class="emojis">${EMOJIS.map(e => `<button type="button" data-emoji="${e}" aria-pressed="${it.emoji === e}">${e}</button>`).join('')}</div>
     <div class="field"><label class="lbl" for="e-emoji">U otro emoji</label><input id="e-emoji" value="${esc(it.emoji)}" maxlength="4"></div>
     <span class="lbl">Color</span>
@@ -611,7 +629,7 @@ function bulkPreview(text) {
   if (!rows.length && !bad.length) return '<p class="muted">Aquí vas a ver cómo quedan antes de guardar.</p>';
   const nNew = rows.filter(r => !r.ex).length, nOld = rows.length - nNew;
   return `<p><b>${nNew ? `${nNew} dulce${nNew === 1 ? '' : 's'} nuevo${nNew === 1 ? '' : 's'}` : ''}${nNew && nOld ? ' y ' : ''}${nOld ? `${nOld} que ya existe${nOld === 1 ? '' : 'n'} (se actualiza${nOld === 1 ? '' : 'n'})` : ''}</b></p>
-  ${rows.map((r, i) => `<div class="item"><div class="sw" style="--c:${r.ex ? esc(r.ex.color) : COLORS[(S.items.length + i) % COLORS.length]}">${esc(r.emoji)}</div>
+  ${rows.map((r, i) => `<div class="item"><div class="sw" style="--c:${r.ex ? esc(r.ex.color) : COLORS[(S.items.length + i) % COLORS.length]}">${r.ex && r.ex.photo ? pic(r.ex) : esc(r.emoji)}</div>
     <div class="t"><b>${esc(r.name)}</b><small class="num">${fmt(r.price)} · ${r.ex ? (r.stock !== null ? `ya existe: tenía ${r.ex.stock}, ahora ${r.ex.stock + r.stock}` : `ya existe: quedan ${r.ex.stock} und.`) : `${r.stock ?? 0} und.`}</small></div></div>`).join('')}
   ${bad.length ? `<div class="warnt">No entendí ${bad.length === 1 ? 'esta línea' : 'estas líneas'} (falta el nombre o el precio):<br>${bad.map(b => `<small>Línea ${b.n}: ${esc(b.line.slice(0, 40))}</small>`).join('<br>')}</div>` : ''}`;
 }
@@ -642,7 +660,7 @@ function pDulces() {
   <div class="card">
     <div class="row" style="justify-content:space-between"><h2>${S.items.length} dulces</h2><div class="row"><button class="btn ghost" id="bulk-open">+ Agregar varios</button><button class="btn" id="add">+ Agregar dulce</button></div></div>
     <div>${S.items.map(i => { const st = i.stock < 0 ? `<span class="pill out">Se vendieron ${-i.stock} de más: actualiza las unidades</span>` : i.stock === 0 ? '<span class="pill out">Agotado</span>' : i.stock <= 3 ? `<span class="pill low">Quedan ${i.stock}</span>` : `<span class="pill">${i.stock} und.</span>`;
-      return `<div class="item"><div class="sw" style="--c:${esc(i.color)}">${esc(i.emoji)}</div>
+      return `<div class="item"><div class="sw" style="--c:${esc(i.color)}">${pic(i)}</div>
       <div class="t"><b>${esc(i.name)}${i.active === false ? ' <span class="pill">oculto</span>' : ''}</b><small class="num">${fmt(i.price)} · </small>${st}</div>
       <button class="btn ghost" data-edit="${i.id}">Editar</button></div>`; }).join('')}</div>
   </div>`;
@@ -720,7 +738,7 @@ async function replaceAll(d, seed) {
   else {
     (d.items || []).forEach((i, n) => ops.push(b => b.set(doc(db, 'items', String(i.id || uid())), {
       name: String(i.name || 'Dulce'), emoji: String(i.emoji || '🍬'), price: num(i.price), color: String(i.color || COLORS[n % COLORS.length]),
-      stock: Math.round(Number(i.stock) || 0), active: i.active !== false, example: !!i.example, order: typeof i.order === 'number' ? i.order : n })));
+      stock: Math.round(Number(i.stock) || 0), photo: typeof i.photo === 'string' && i.photo.startsWith('data:image/') ? i.photo : null, active: i.active !== false, example: !!i.example, order: typeof i.order === 'number' ? i.order : n })));
     const t = d.turn || {};
     (t.sales || []).forEach(s => ops.push(b => b.set(doc(db, 'sales', String(s.id || uid())), {
       itemId: String(s.itemId), name: String(s.name), emoji: String(s.emoji), price: num(s.price), t: Number(s.t) || Date.now(), by: s.by === 'parent' ? 'parent' : 'kid', ...(s.ticket ? { ticket: String(s.ticket) } : {}), pay: s.pay === 'transfer' ? 'transfer' : 'cash', ok: !!s.ok })));
@@ -814,14 +832,15 @@ app.addEventListener('click', e => {
   if (t.id === 'bulksave') { bulkSave(bulk || ''); return; }
   if (t.id === 'add') { bulk = null; editing = { id: null, name: '', emoji: '🍬', price: 500, color: COLORS[S.items.length % COLORS.length], stock: 10, active: true }; confirmKey = null; render(); scrollTo(0, 0); return; }
   if (t.dataset.edit) { editing = { ...itemById(t.dataset.edit) }; confirmKey = null; render(); scrollTo(0, 0); return; }
-  if (t.dataset.emoji) { readForm(); editing.emoji = t.dataset.emoji; render(); return; }
+  if (t.dataset.emoji) { readForm(); editing.emoji = t.dataset.emoji; editing.photo = null; render(); return; }
+  if (t.id === 'e-nophoto') { readForm(); editing.photo = null; render(); return; }
   if (t.dataset.color) { readForm(); editing.color = t.dataset.color; render(); return; }
   if (t.id === 'e-cancel') { editing = null; confirmKey = null; render(); return; }
   if (t.id === 'e-del') { readForm(); confirmKey = 'del'; render(); return; }
   if (t.id === 'e-del-yes') { const b = writeBatch(db); b.delete(doc(db, 'items', editing.id)); commit(b, 'Dulce borrado'); editing = null; confirmKey = null; render(); return; }
   if (t.id === 'e-save') { readForm();
     if (!editing.name.trim()) { toast('Ponle un nombre al dulce'); return; }
-    const data = { name: editing.name.trim(), emoji: editing.emoji || '🍬', price: editing.price, color: editing.color, stock: editing.stock + num(editing.add), active: editing.active, example: false };
+    const data = { name: editing.name.trim(), emoji: editing.emoji || '🍬', photo: editing.photo || null, price: editing.price, color: editing.color, stock: editing.stock + num(editing.add), active: editing.active, example: false };
     const b = writeBatch(db);
     if (editing.id) b.update(doc(db, 'items', editing.id), data);
     else b.set(doc(itemsCol()), { ...data, order: Date.now() });
@@ -865,7 +884,13 @@ app.addEventListener('input', e => {
   if (t.dataset.inv) { inv[t.dataset.inv] = t.value.replace(/[^\d]/g, ''); refresh(); }
   if (t.id === 'e-emoji') { const v = t.value.trim(); if (v && editing) { editing.emoji = v; app.querySelectorAll('[data-emoji]').forEach(b => b.setAttribute('aria-pressed', b.dataset.emoji === v)); } }
 });
-app.addEventListener('change', e => { if (e.target.id === 'sound') { sound = e.target.checked; try { localStorage.setItem(SOUND_KEY, sound ? '1' : '0'); } catch (err) {} } });
+app.addEventListener('change', e => {
+  if (e.target.id === 'e-photo' && editing && e.target.files && e.target.files[0]) {
+    readForm(); toast('Preparando la foto…');
+    shrinkPhoto(e.target.files[0]).then(d => { if (!editing) return; readForm(); editing.photo = d; render(); toast('Foto lista. Toca Guardar.'); },
+      () => toast('No se pudo leer esa foto'));
+    return;
+  } if (e.target.id === 'sound') { sound = e.target.checked; try { localStorage.setItem(SOUND_KEY, sound ? '1' : '0'); } catch (err) {} } });
 
 try { navigator.wakeLock && navigator.wakeLock.request('screen').catch(() => {}); } catch (e) {}
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('./sw.js').catch(() => {});

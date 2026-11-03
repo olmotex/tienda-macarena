@@ -195,3 +195,11 @@ textarea{width:100%;min-height:110px;border-radius:12px;border:2px solid var(--l
 .okbtn{border-radius:999px;padding:4px 10px;font-weight:800;font-size:.8rem;border:2px solid var(--warn);color:var(--warn)!important;white-space:nowrap}
 .okbtn.on{border-color:var(--good);background:color-mix(in srgb,var(--good) 15%,transparent);color:var(--good)!important}
 .warnt{display:block;color:var(--warn);font-weight:800}
+/* foto del dulce */
+img.ph{display:block;width:100%;height:100%;object-fit:cover;border-radius:inherit}
+.sw,.chip{overflow:hidden}
+.candy .em img.ph{width:4.4rem;height:4.4rem;border-radius:18px;border:3px solid rgba(255,255,255,.8);margin:2px 0}
+.partyem img.ph{display:inline-block;width:2.4rem;height:2.4rem;border-radius:10px;vertical-align:middle}
+.photorow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:6px 0}
+.sw.big{width:72px;height:72px;font-size:2.6rem;border-radius:18px}
+.photobtn{cursor:pointer}
