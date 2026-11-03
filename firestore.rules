@@ -18,11 +18,13 @@ service cloud.firestore {
             || request.resource.data.stock == resource.data.stock + 1));
     }
 
-    // Ventas del turno abierto: Macarena registra ventas al precio real (agrupadas por cliente en 'ticket').
+    // Ventas del turno abierto: Macarena registra ventas al precio real (agrupadas por cliente en 'ticket', con forma de pago 'pay').
+    // Solo los papás marcan si una transferencia llegó ('ok').
     match /sales/{id} {
       allow read: if isFamily();
       allow create: if isParent() || (isKid()
-        && request.resource.data.keys().hasOnly(['itemId', 'name', 'emoji', 'price', 't', 'by', 'ticket'])
+        && request.resource.data.keys().hasOnly(['itemId', 'name', 'emoji', 'price', 't', 'by', 'ticket', 'pay'])
+        && (!('pay' in request.resource.data) || request.resource.data.pay in ['cash', 'transfer'])
         && request.resource.data.by == 'kid'
         && exists(/databases/$(database)/documents/items/$(request.resource.data.itemId))
         && request.resource.data.price == item(request.resource.data.itemId).price);
