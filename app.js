@@ -42,7 +42,7 @@ const uid = () => Math.random().toString(36).slice(2, 9) + Date.now().toString(3
 
 // ---------- estado ----------
 // S se llena desde Firebase. role: 'kid' | 'parent' | null
-const S = { items: [], sales: [], turn: null, closings: [], loaded: { items: false, sales: false, turn: false } };
+const S = { items: [], sales: [], turn: null, closings: [], debts: [], loaded: { items: false, sales: false, turn: false } };
 let role = null, user = null, unsubs = [];
 let sound = true;
 try { sound = localStorage.getItem(SOUND_KEY) !== '0'; } catch (e) {}
@@ -78,6 +78,7 @@ const itemsCol = () => collection(db, 'items');
 const salesCol = () => collection(db, 'sales');
 const closingsCol = () => collection(db, 'closings');
 const turnDoc = () => doc(db, 'meta', 'turn');
+const debtsCol = () => collection(db, 'debts');
 
 function commit(batch, okMsg) {
   batch.commit().then(() => { if (okMsg) toast(okMsg); })
@@ -238,6 +239,9 @@ function listen() {
   unsubs.push(onSnapshot(query(salesCol(), orderBy('t')), snap => {
     S.sales = snap.docs.map(d => ({ id: d.id, ...d.data() })); S.loaded.sales = true; refresh();
   }, onErr));
+  unsubs.push(onSnapshot(query(debtsCol(), orderBy('t')), snap => {
+    S.debts = snap.docs.map(d => ({ id: d.id, ...d.data() })); refresh();
+  }, onErr));
   unsubs.push(onSnapshot(turnDoc(), snap => {
     S.turn = snap.exists() ? snap.data() : null; S.loaded.turn = true;
     // Primera vez: los papás crean el turno y los dulces de ejemplo.
@@ -378,7 +382,7 @@ function renderKid() {
     <h1 id="kidtitle">La tienda de Macarena</h1>
     <div class="row" style="flex-wrap:nowrap">${role === 'parent' ? '<button class="btn ghost" id="toparent">Modo papás</button>' : ''}<button class="lockbtn" id="home" aria-label="Inicio: cambiar de usuario">🏠</button></div>
   </div>
-  <div class="today"><span>☀️ Hoy vendiste</span><b class="num">${fmt(total(S.sales))}</b><small>${nT} ${nT === 1 ? 'venta' : 'ventas'}</small></div>
+  <div class="today"><span>☀️ Hoy vendiste</span><b class="num">${fmt(total(S.sales))}</b><small>${nT} ${nT === 1 ? 'venta' : 'ventas'}</small>${debtsOpen().length ? `<button class="fiadosbtn" id="kidfiados">📝 Fiados (${debtsOpen().length})</button>` : ''}</div>
   <div class="grid kidgrid">${items.map(i => {
     // Siempre se puede vender: el inventario es solo una guía (si dice 0 pero hay en físico, igual se vende).
     const c = inCart(i.id), left = i.stock - c, low = left > 0 && left <= 3;
@@ -417,19 +421,40 @@ function askPay() {
     <b class="num paytotal">${fmt(cartTotal())}</b>
     <button class="paybtn cash" data-paywith="cash"><span>💵</span>Billetes o monedas</button>
     <button class="paybtn transfer" data-paywith="transfer"><span>📱</span>Transferencia</button>
+    <button class="paybtn credit" data-paywith="credit"><span>📝</span>Fiado (paga después)</button>
     <button class="btn ghost big" data-paywith="">Volver</button></div>`;
   o.addEventListener('click', e => {
     if (e.target === o) { o.remove(); return; }
     const b = e.target.closest('[data-paywith]'); if (!b) return;
-    o.remove(); if (b.dataset.paywith) pay(b.dataset.paywith);
+    o.remove(); if (b.dataset.paywith === 'credit') askWho(); else if (b.dataset.paywith) pay(b.dataset.paywith);
   });
   document.body.appendChild(o);
 }
-function pay(method) {
+// Fiado: preguntar quién queda debiendo (la Nana lo escribe, o toca un nombre que ya fió antes).
+function askWho() {
+  const names = [...new Set(S.debts.slice().reverse().map(d => d.name))].slice(0, 8);
+  const o = document.createElement('div'); o.className = 'overlay'; o.id = 'askwho';
+  o.innerHTML = `<div class="pinbox paybox" role="dialog" aria-label="Quién queda debiendo"><h2>📝 ¿Quién queda debiendo?</h2>
+    <b class="num paytotal">${fmt(cartTotal())}</b>
+    ${names.length ? `<div class="whochips">${names.map(n => `<button class="btn ghost" data-who-name="${esc(n)}">${esc(n)}</button>`).join('')}</div>` : ''}
+    <input id="whoname" maxlength="30" placeholder="Nombre" autocomplete="off">
+    <button class="paybtn credit" id="whook"><span>📝</span>Anotar fiado</button>
+    <button class="btn ghost big" id="whoback">Volver</button></div>`;
+  const go = n => { n = (n || '').trim().slice(0, 30); if (!n) { toast('Escribe el nombre'); return; } o.remove(); pay('credit', n); };
+  o.addEventListener('click', e => {
+    if (e.target === o || e.target.closest('#whoback')) { o.remove(); return; }
+    const c = e.target.closest('[data-who-name]'); if (c) { go(c.dataset.whoName); return; }
+    if (e.target.closest('#whook')) go(o.querySelector('#whoname').value);
+  });
+  document.body.appendChild(o); setTimeout(() => { const i = o.querySelector('#whoname'); i && i.focus(); }, 50);
+}
+function pay(method, who) {
   const ci = cartItems(); if (!ci.length) { cart = []; saveCart(); renderKid(); return; }
   const sum = cartTotal(), ticket = uid(), t = Date.now(), counts = new Map();
   const b = writeBatch(db);
-  priceLines(ci).forEach(({ it, price, promo }) => {
+  const lines = priceLines(ci);
+  if (method === 'credit') b.set(doc(db, 'debts', ticket), { name: who, total: sum, items: lines.map(l => ({ name: l.it.name, emoji: l.it.emoji, price: l.price })), t, by: role, paid: false });
+  lines.forEach(({ it, price, promo }) => {
     b.set(doc(salesCol()), { itemId: it.id, name: it.name, emoji: it.emoji, price, t, by: role, ticket, pay: method, ...(promo ? { promo: true } : {}) });
     counts.set(it.id, (counts.get(it.id) || 0) + 1);
   });
@@ -437,8 +462,21 @@ function pay(method) {
   commit(b);
   cart = []; saveCart(); cashSound(); renderKid();
   const o = document.createElement('div'); o.className = 'overlay party';
-  o.innerHTML = `<div class="partybox"><div class="big">🎉</div><h2>¡Venta lista!</h2><b class="num">${fmt(sum)}</b><span>${method === 'transfer' ? '📱 Transferencia' : '💵 Billetes'}</span><span class="partyem">${ci.map(i => pic(i)).join(' ')}</span></div>`;
+  o.innerHTML = `<div class="partybox"><div class="big">🎉</div><h2>¡Venta lista!</h2><b class="num">${fmt(sum)}</b><span>${method === 'transfer' ? '📱 Transferencia' : method === 'credit' ? '📝 Fiado: ' + esc(who) : '💵 Billetes'}</span><span class="partyem">${ci.map(i => pic(i)).join(' ')}</span></div>`;
   o.addEventListener('click', () => o.remove()); document.body.appendChild(o); setTimeout(() => o.remove(), 1800);
+}
+function showKidDebts() {
+  let o = document.getElementById('kiddebts');
+  if (!o) { o = document.createElement('div'); o.className = 'overlay'; o.id = 'kiddebts';
+    o.addEventListener('click', e => {
+      if (e.target === o || e.target.closest('#kdclose')) { o.remove(); return; }
+      const b = e.target.closest('[data-debtpay]'); if (b) payDebt(b.dataset.debtpay, b.dataset.with);
+    }); document.body.appendChild(o); }
+  const list = debtsOpen();
+  o.innerHTML = `<div class="pinbox paybox" role="dialog" aria-label="Fiados"><h2>📝 Fiados</h2>
+    <p class="muted" style="margin:0">Cuando alguien pague, toca 💵 o 📱.</p>
+    <div style="text-align:left;max-height:55vh;overflow:auto">${list.length ? list.map(d => debtRow(d, true)).join('') : '<p>¡Nadie debe nada! 🎉</p>'}</div>
+    <button class="btn ghost big" id="kdclose">Cerrar</button></div>`;
 }
 function cashSound() {
   if (!sound) return;
@@ -453,7 +491,29 @@ function cashSound() {
 }
 
 // ---------- MODO PAPÁS ----------
-const payOf = s => s.pay === 'transfer' ? 'transfer' : 'cash';
+const payOf = s => s.pay === 'transfer' ? 'transfer' : s.pay === 'credit' ? 'credit' : 'cash';
+const creditTotal = sales => total(sales.filter(s => payOf(s) === 'credit'));
+// Fiados: ventas que se pagan después. Quedan en 'debts' (no se borran al cerrar caja) hasta que pagan.
+const debtsOpen = () => S.debts.filter(d => !d.paid);
+const debtsPaidTurn = () => S.debts.filter(d => d.paid && d.paidAt >= turn().start);
+const debtCash = () => debtsPaidTurn().filter(d => d.paidWith === 'cash').reduce((a, d) => a + d.total, 0);
+const debtTr = () => debtsPaidTurn().filter(d => d.paidWith === 'transfer').reduce((a, d) => a + d.total, 0);
+const debtTrPending = () => debtsPaidTurn().filter(d => d.paidWith === 'transfer' && !d.ok);
+const ago = t => { const d = Math.floor((Date.now() - t) / 864e5); return d <= 0 ? 'hoy' : d === 1 ? 'ayer' : `hace ${d} días`; };
+function debtRow(d, kid) {
+  return `<div class="sale debt"><span><b>${esc(d.name)}</b> <span class="muted num">· ${ago(d.t)}</span><br>${(d.items || []).map(x => esc(x.emoji)).join(' ')}</span>
+    <span class="row" style="gap:4px;flex-wrap:wrap;justify-content:flex-end"><b class="num">${fmt(d.total)}</b>
+    <button class="okbtn" data-debtpay="${esc(d.id)}" data-with="cash">💵 Pagó</button><button class="okbtn" data-debtpay="${esc(d.id)}" data-with="transfer">📱 Pagó</button>
+    ${kid ? '' : (confirmKey === 'deldebt:' + d.id ? `<button class="btn danger" data-deldebtyes="${esc(d.id)}">¿Borrar?</button>` : `<button data-deldebt="${esc(d.id)}">Borrar</button>`)}</span></div>`;
+}
+function debtPaidRow(d) {
+  return `<div class="sale"><span><b>${esc(d.name)}</b> <span class="muted num">· pagó ${d.paidWith === 'transfer' ? '📱' : '💵'} ${hr(d.paidAt)}</span></span>
+    <span class="row" style="gap:4px;flex-wrap:nowrap"><b class="num">${fmt(d.total)}</b>${d.paidWith === 'transfer' ? `<button class="okbtn${d.ok ? ' on' : ''}" data-okdebt="${esc(d.id)}">${d.ok ? '✓ Llegó' : '¿Llegó?'}</button>` : ''}</span></div>`;
+}
+function payDebt(id, w) {
+  const b = writeBatch(db); b.update(doc(db, 'debts', id), { paid: true, paidAt: Date.now(), paidWith: w === 'transfer' ? 'transfer' : 'cash' });
+  commit(b, w === 'transfer' ? 'Fiado pagado por transferencia' : 'Fiado pagado: guarda la plata en la caja'); if (sound) cashSound();
+}
 const cashTotal = sales => total(sales.filter(s => payOf(s) === 'cash'));
 const transferTotal = sales => total(sales.filter(s => payOf(s) === 'transfer'));
 const pendingTransfers = sales => tickets(sales).filter(g => payOf(g.sales[0]) === 'transfer' && !g.sales.every(s => s.ok));
@@ -495,10 +555,16 @@ function pHoy() {
     <div class="kpi"><span class="lbl">Ventas · productos</span><b class="num">${tk.length} · ${sales.length}</b></div>
     <div class="kpi"><span class="lbl">💵 Efectivo</span><b class="num">${fmt(cashTotal(sales))}</b></div>
     <div class="kpi"><span class="lbl">📱 Transferencias</span><b class="num">${fmt(transferTotal(sales))}</b>
-      ${pendingTransfers(sales).length ? `<small class="warnt">${pendingTransfers(sales).length} por confirmar</small>` : ''}</div>${profitKpi(sales)}</div>
+      ${pendingTransfers(sales).length ? `<small class="warnt">${pendingTransfers(sales).length} por confirmar</small>` : ''}</div>
+    ${creditTotal(sales) || debtsPaidTurn().length ? `<div class="kpi"><span class="lbl">📝 Fiado hoy</span><b class="num">${fmt(creditTotal(sales))}</b></div>
+    <div class="kpi"><span class="lbl">Fiados que pagaron</span><b class="num">${fmt(debtCash() + debtTr())}</b></div>` : ''}${profitKpi(sales)}</div>
     ${sales.some(x => x.promo) ? `<p class="muted" style="margin:0">🎉 ${sales.filter(x => x.promo).length} unidades vendidas con promo${discountTotal(sales) ? ` (descuento dado: ${fmt(discountTotal(sales))})` : ''}</p>` : ''}
     <button class="btn big" data-tab="cierre">Cerrar caja</button>
   </div>
+  ${debtsOpen().length || debtsPaidTurn().length ? `<div class="card"><h2>📝 Fiados pendientes</h2>
+    ${debtsOpen().length ? `<p class="muted" style="margin:0">Deben en total <b class="num">${fmt(debtsOpen().reduce((a, d) => a + d.total, 0))}</b>. Cuando paguen, toca 💵 o 📱.</p>${debtsOpen().map(d => debtRow(d, false)).join('')}` : '<p class="muted" style="margin:0">Nadie debe nada. 🎉</p>'}
+    ${debtsPaidTurn().length ? `<h3 style="margin:12px 0 0">Pagaron en este turno</h3>${debtsPaidTurn().map(debtPaidRow).join('')}` : ''}
+  </div>` : ''}
   <div class="card"><h2>Por producto</h2>
     ${rows.length ? `<div class="tw"><table><thead><tr><th>Producto</th><th class="r">Cant.</th><th class="r">Total</th></tr></thead><tbody>
     ${rows.map(r => `<tr><td>${esc(r.emoji)} ${esc(r.name)}</td><td class="r num">${r.qty}</td><td class="r num">${fmt(r.sum)}</td></tr>`).join('')}
@@ -506,7 +572,7 @@ function pHoy() {
   </div>
   <div class="card"><h2>Cada venta</h2>
     <p class="muted" style="margin:0">Si una venta quedó mal, bórrala aquí. Los productos vuelven al inventario.</p>
-    ${tk.length ? tk.map((g, n) => ({ g, n: n + 1 })).reverse().map(({ g, n }) => `<div class="sale"><span><b>Venta ${n}</b> ${payOf(g.sales[0]) === 'transfer' ? '📱' : '💵'} <span class="muted num">· ${hr(g.t)}${g.by === 'parent' ? ' · papás' : ''}</span><br>${g.sales.map(s => esc(s.emoji)).join(' ')}</span>
+    ${tk.length ? tk.map((g, n) => ({ g, n: n + 1 })).reverse().map(({ g, n }) => `<div class="sale"><span><b>Venta ${n}</b> ${payOf(g.sales[0]) === 'transfer' ? '📱' : payOf(g.sales[0]) === 'credit' ? '📝 ' + esc((S.debts.find(d => d.id === g.id) || {}).name || 'Fiado') : '💵'} <span class="muted num">· ${hr(g.t)}${g.by === 'parent' ? ' · papás' : ''}</span><br>${g.sales.map(s => esc(s.emoji)).join(' ')}</span>
       <span class="row" style="gap:4px;flex-wrap:nowrap">${payOf(g.sales[0]) === 'transfer' ? transferBtn(g) : ''}<b class="num">${fmt(total(g.sales))}</b><button data-delticket="${esc(g.id)}">Borrar</button></span></div>`).join('') : '<p class="muted">Sin ventas.</p>'}
   </div>`;
 }
@@ -525,7 +591,8 @@ function invSummary(rows) {
 }
 function pCierre() {
   const sales = total(S.sales), cash = cashTotal(S.sales), tr = transferTotal(S.sales), pend = pendingTransfers(S.sales);
-  const base = turn().base || 0, expected = base + cash, c = countedValue();
+  const cr = creditTotal(S.sales), dC = debtCash(), dT = debtTr(), dTp = debtTrPending();
+  const base = turn().base || 0, expected = base + cash + dC, c = countedValue();
   let cls = 'none', title = 'Escribe cuánta plata hay', sub = '';
   if (c !== null) { const d = c - expected;
     if (d === 0) { cls = 'ok'; title = '¡Cuadra perfecto!'; sub = 'La plata coincide con las ventas.'; }
@@ -539,7 +606,7 @@ function pCierre() {
   </div>
   <div class="card">
     <h2>2. Cuenta la plata de la caja</h2>
-    <p class="muted" style="margin:0">Solo billetes y monedas. Las transferencias se revisan aparte (paso 3).</p>
+    <p class="muted" style="margin:0">Solo billetes y monedas. Las transferencias se revisan aparte (paso 3). Los fiados que todavía no pagan no están en la caja.</p>
     <div class="field"><label class="lbl" for="counted">Total contado</label><input id="counted" inputmode="numeric" value="${esc(counted)}" placeholder="Ej: 12500"></div>
     <details ${denTotal() ? 'open' : ''}><summary class="lbl" style="cursor:pointer">Contar por billetes y monedas</summary>
       <div class="denoms" style="margin-top:10px">${DENOMS.map(d => `<div class="den"><span class="num">${fmt(d)}</span>
@@ -552,9 +619,10 @@ function pCierre() {
     ${tr ? `<p class="muted" style="margin:0">Mira en tu cuenta (Nequi, banco…) que cada una haya llegado y márcala.</p>
       ${tickets(S.sales).map((g, n) => ({ g, n: n + 1 })).filter(({ g }) => payOf(g.sales[0]) === 'transfer').map(({ g, n }) => `<div class="sale"><span><b>Venta ${n}</b> <span class="muted num">· ${hr(g.t)}</span></span>
         <span class="row" style="gap:6px;flex-wrap:nowrap"><b class="num">${fmt(total(g.sales))}</b>${transferBtn(g)}</span></div>`).join('')}
-      <div class="diff ${pend.length ? 'plus' : 'ok'}"><b class="num">${pend.length ? `Faltan por confirmar ${pend.length} = ${fmt(pend.reduce((a, g) => a + total(g.sales), 0))}` : `Llegaron todas: ${fmt(tr)}`}</b>
-        <span>${pend.length ? 'Si alguna no llegó, revisa con quien vendió antes de cerrar.' : 'Las transferencias cuadran.'}</span></div>`
-    : '<p class="muted" style="margin:0">No hubo transferencias en este turno.</p>'}
+      ${dT ? `<p class="muted" style="margin:8px 0 0">Fiados pagados por transferencia:</p>${debtsPaidTurn().filter(d => d.paidWith === 'transfer').map(debtPaidRow).join('')}` : ''}
+      <div class="diff ${pend.length + dTp.length ? 'plus' : 'ok'}"><b class="num">${pend.length + dTp.length ? `Faltan por confirmar ${pend.length + dTp.length} = ${fmt(pend.reduce((a, g) => a + total(g.sales), 0) + dTp.reduce((a, d) => a + d.total, 0))}` : `Llegaron todas: ${fmt(tr + dT)}`}</b>
+        <span>${pend.length + dTp.length ? 'Si alguna no llegó, revisa con quien vendió antes de cerrar.' : 'Las transferencias cuadran.'}</span></div>`
+    : dT ? `<p class="muted" style="margin:0">Fiados pagados por transferencia:</p>${debtsPaidTurn().filter(d => d.paidWith === 'transfer').map(debtPaidRow).join('')}` : '<p class="muted" style="margin:0">No hubo transferencias en este turno.</p>'}
   </div>
   <div class="card">
     <h2>4. Cuenta los productos <span class="muted" style="font-size:.9rem">(recomendado)</span></h2>
@@ -572,7 +640,9 @@ function pCierre() {
     <div class="tw"><table><tbody>
       <tr><td>Ventas del turno (${S.sales.length} productos)</td><td class="r num">${fmt(sales)}</td></tr>
       <tr><td class="muted">− 📱 Pagadas por transferencia</td><td class="r num muted">${fmt(tr)}</td></tr>
+      ${cr ? `<tr><td class="muted">− 📝 Fiado (pagan después)</td><td class="r num muted">${fmt(cr)}</td></tr>` : ''}
       <tr><td>💵 Ventas en efectivo</td><td class="r num">${fmt(cash)}</td></tr>
+      ${dC ? `<tr><td>+ 💵 Fiados que pagaron en efectivo</td><td class="r num">${fmt(dC)}</td></tr>` : ''}
       <tr><td>+ Sencillo inicial</td><td class="r num">${fmt(base)}</td></tr>
       <tr><td><b>Debería haber en la caja</b></td><td class="r num"><b>${fmt(expected)}</b></td></tr>
       <tr><td>Hay en la caja</td><td class="r num">${c === null ? '—' : fmt(c)}</td></tr>
@@ -722,9 +792,10 @@ function pHist() {
     return `<details class="hist"><summary><span>${esc(dt(c.end))}<br><small class="muted num">${c.count} productos · ${fmt(c.sales)}${c.profit !== undefined ? ` · ganancia ${fmt(c.profit)}` : ''}</small></span>
       <span style="display:grid;gap:4px;justify-items:end"><span class="pill ${d === 0 ? '' : d < 0 ? 'out' : 'low'} num">${d === 0 ? 'Plata cuadró' : d < 0 ? 'Faltó ' + fmt(-d) : 'Sobró ' + fmt(d)}</span>
       ${c.transferPending ? `<span class="pill out num">Transferencias sin confirmar ${fmt(c.transferPending)}</span>` : ''}
+      ${c.creditSales ? `<span class="pill low num">📝 Fiado ${fmt(c.creditSales)}</span>` : ''}
       ${c.inventory ? `<span class="pill ${c.missUnits ? 'out' : ''} num">${c.missUnits ? `Faltaron ${c.missUnits} productos (${fmt(c.missValue)})` : 'Productos cuadraron'}</span>` : ''}</span></summary>
       <div class="tw"><table><tbody>
-      ${c.transferSales !== undefined ? `<tr><td>💵 Efectivo</td><td class="r num">${fmt(c.cashSales)}</td></tr><tr><td>📱 Transferencias${c.transferPending ? ` <span style="color:var(--bad)">(sin confirmar ${fmt(c.transferPending)})</span>` : ''}</td><td class="r num">${fmt(c.transferSales)}</td></tr>` : ''}
+      ${c.transferSales !== undefined ? `<tr><td>💵 Efectivo</td><td class="r num">${fmt(c.cashSales)}</td></tr>${c.creditSales ? `<tr><td>📝 Fiado</td><td class="r num">${fmt(c.creditSales)}</td></tr>` : ''}${c.debtCashPaid || c.debtTransferPaid ? `<tr><td>Fiados que pagaron (💵 ${fmt(c.debtCashPaid || 0)} · 📱 ${fmt(c.debtTransferPaid || 0)})</td><td class="r num">${fmt((c.debtCashPaid || 0) + (c.debtTransferPaid || 0))}</td></tr>` : ''}<tr><td>📱 Transferencias${c.transferPending ? ` <span style="color:var(--bad)">(sin confirmar ${fmt(c.transferPending)})</span>` : ''}</td><td class="r num">${fmt(c.transferSales)}</td></tr>` : ''}
       <tr><td>Sencillo inicial</td><td class="r num">${fmt(c.base)}</td></tr><tr><td>Debía haber en la caja</td><td class="r num">${fmt(c.expected)}</td></tr>
       <tr><td>Se contó</td><td class="r num">${fmt(c.counted)}</td></tr>
       ${(c.items || []).map(r => `<tr><td class="muted">${esc(r.emoji)} ${esc(r.name)} × ${r.qty}</td><td class="r num muted">${fmt(r.sum)}</td></tr>`).join('')}
@@ -740,7 +811,8 @@ function backupJSON() {
   return JSON.stringify({
     items: S.items.map(strip),
     turn: { start: turn().start, base: turn().base || 0, sales: S.sales.map(s => ({ id: s.id, itemId: s.itemId, name: s.name, emoji: s.emoji, price: s.price, t: s.t, by: s.by, ticket: s.ticket || null, pay: payOf(s), ok: !!s.ok, promo: !!s.promo })) },
-    closings: S.closings.map(({ id, ...c }) => c)
+    closings: S.closings.map(({ id, ...c }) => c),
+    debts: S.debts.map(strip)
   });
 }
 function pAjustes() {
@@ -774,9 +846,9 @@ function pAjustes() {
 
 // Reemplaza todos los datos por los de una copia (formato de la app anterior o de esta).
 async function replaceAll(d, seed) {
-  const [it, sa, cl] = await Promise.all([getDocs(itemsCol()), getDocs(salesCol()), getDocs(closingsCol())]);
+  const [it, sa, cl, de] = await Promise.all([getDocs(itemsCol()), getDocs(salesCol()), getDocs(closingsCol()), getDocs(debtsCol())]);
   const ops = [];
-  [it, sa, cl].forEach(snap => snap.docs.forEach(x => ops.push(b => b.delete(x.ref))));
+  [it, sa, cl, de].forEach(snap => snap.docs.forEach(x => ops.push(b => b.delete(x.ref))));
   if (seed) { ops.push(...sampleOps()); ops.push(b => b.set(turnDoc(), { start: Date.now(), base: 0 })); }
   else {
     (d.items || []).forEach((i, n) => ops.push(b => b.set(doc(db, 'items', String(i.id || uid())), {
@@ -784,8 +856,11 @@ async function replaceAll(d, seed) {
       stock: Math.round(Number(i.stock) || 0), photo: typeof i.photo === 'string' && i.photo.startsWith('data:image/') ? i.photo : null, cost: num(i.cost) || null, promoQty: num(i.promoQty) >= 2 ? num(i.promoQty) : null, promoPrice: num(i.promoQty) >= 2 && num(i.promoPrice) ? num(i.promoPrice) : null, active: i.active !== false, example: !!i.example, order: typeof i.order === 'number' ? i.order : n })));
     const t = d.turn || {};
     (t.sales || []).forEach(s => ops.push(b => b.set(doc(db, 'sales', String(s.id || uid())), {
-      itemId: String(s.itemId), name: String(s.name), emoji: String(s.emoji), price: num(s.price), t: Number(s.t) || Date.now(), by: s.by === 'parent' ? 'parent' : 'kid', ...(s.ticket ? { ticket: String(s.ticket) } : {}), pay: s.pay === 'transfer' ? 'transfer' : 'cash', ok: !!s.ok, ...(s.promo ? { promo: true } : {}) })));
+      itemId: String(s.itemId), name: String(s.name), emoji: String(s.emoji), price: num(s.price), t: Number(s.t) || Date.now(), by: s.by === 'parent' ? 'parent' : 'kid', ...(s.ticket ? { ticket: String(s.ticket) } : {}), pay: ['transfer', 'credit'].includes(s.pay) ? s.pay : 'cash', ok: !!s.ok, ...(s.promo ? { promo: true } : {}) })));
     (d.closings || []).forEach(c => ops.push(b => b.set(doc(closingsCol()), c)));
+    (d.debts || []).forEach(x => ops.push(b => b.set(doc(db, 'debts', String(x.id || uid())), {
+      name: String(x.name || 'Fiado').slice(0, 30), total: num(x.total), items: Array.isArray(x.items) ? x.items.map(i => ({ name: String(i.name), emoji: String(i.emoji), price: num(i.price) })) : [],
+      t: Number(x.t) || Date.now(), by: x.by === 'kid' ? 'kid' : 'parent', paid: !!x.paid, ...(x.paid ? { paidAt: Number(x.paidAt) || Date.now(), paidWith: x.paidWith === 'transfer' ? 'transfer' : 'cash', ok: !!x.ok } : {}) })));
     ops.push(b => b.set(turnDoc(), { start: Number(t.start) || Date.now(), base: num(t.base) }));
   }
   await runOps(ops);
@@ -810,6 +885,7 @@ function render() {
 // Volver a dibujar cuando llegan datos nuevos, sin perder lo que se está escribiendo.
 function refresh() {
   if (!user || !role || screen !== 'app') return;
+  if (document.getElementById('kiddebts')) showKidDebts();
   readForm();
   const a = document.activeElement, id = a && a.id, pos = a && a.selectionStart;
   render();
@@ -835,6 +911,8 @@ app.addEventListener('click', e => {
   if (t.dataset.unpick) { unpick(+t.dataset.unpick); return; }
   if (t.id === 'clearcart') { cart = []; saveCart(); renderKid(); return; }
   if (t.id === 'pay') { askPay(); return; }
+  if (t.id === 'kidfiados') { showKidDebts(); return; }
+  if (t.dataset.debtpay) { payDebt(t.dataset.debtpay, t.dataset.with); return; }
   if (role !== 'parent') return; // de aquí en adelante, solo papás
   if (t.id === 'toparent') { mode = 'parent'; render(); scrollTo(0, 0); return; }
   if (t.id === 'tokid') { mode = 'kid'; editing = null; confirmKey = null; render(); scrollTo(0, 0); return; }
@@ -846,22 +924,27 @@ app.addEventListener('click', e => {
     g.sales.forEach(s => b.update(doc(db, 'sales', s.id), { ok: v }));
     commit(b, v ? 'Transferencia confirmada' : 'Marcada como no confirmada'); return;
   }
+  if (t.dataset.okdebt) { const d = S.debts.find(x => x.id === t.dataset.okdebt); if (!d) return; const b = writeBatch(db); b.update(doc(db, 'debts', d.id), { ok: !d.ok }); commit(b, d.ok ? 'Marcada como no confirmada' : 'Transferencia confirmada'); return; }
+  if (t.dataset.deldebt) { confirmKey = 'deldebt:' + t.dataset.deldebt; render(); return; }
+  if (t.dataset.deldebtyes) { const b = writeBatch(db); b.delete(doc(db, 'debts', t.dataset.deldebtyes)); commit(b, 'Fiado borrado'); confirmKey = null; return; }
   if (t.dataset.delticket) {
     const g = tickets(S.sales).find(x => x.id === t.dataset.delticket); if (!g) return;
     const b = writeBatch(db), counts = new Map();
     g.sales.forEach(s => { b.delete(doc(db, 'sales', s.id)); if (itemById(s.itemId)) counts.set(s.itemId, (counts.get(s.itemId) || 0) + 1); });
     counts.forEach((n, id) => b.update(doc(db, 'items', id), { stock: increment(n) }));
+    if (S.debts.some(d => d.id === g.id && !d.paid)) b.delete(doc(db, 'debts', g.id));
     commit(b, 'Venta borrada'); return;
   }
   if (t.dataset.den) { const d = +t.dataset.den; den[d] = Math.max(0, (den[d] || 0) + +t.dataset.dir); counted = String(denTotal()); render(); return; }
   if (t.id === 'close') { confirmKey = 'close'; render(); return; }
   if (t.id === 'doclose') {
     const sales = total(S.sales), base = turn().base || 0, cash = cashTotal(S.sales), tr = transferTotal(S.sales);
-    const pendV = pendingTransfers(S.sales).reduce((a, g) => a + total(g.sales), 0);
+    const pendV = pendingTransfers(S.sales).reduce((a, g) => a + total(g.sales), 0) + debtTrPending().reduce((a, d) => a + d.total, 0);
+    const cr = creditTotal(S.sales), dC = debtCash(), dT = debtTr();
     const b = writeBatch(db);
     const su = invSummary(invRows());
     const pf = profitOf(S.sales);
-    b.set(doc(closingsCol()), { ...(pf.withCost ? { profit: pf.profit } : {}), start: turn().start, end: Date.now(), base, sales, expected: base + cash, cashSales: cash, transferSales: tr, transferPending: pendV, counted: countedValue() || 0, count: S.sales.length, items: byItem(S.sales), note,
+    b.set(doc(closingsCol()), { ...(pf.withCost ? { profit: pf.profit } : {}), start: turn().start, end: Date.now(), base, sales, expected: base + cash + dC, cashSales: cash, transferSales: tr, transferPending: pendV, creditSales: cr, debtCashPaid: dC, debtTransferPaid: dT, debtsOpen: debtsOpen().reduce((a, d) => a + d.total, 0), counted: countedValue() || 0, count: S.sales.length, items: byItem(S.sales), note,
       ...(su.counted ? { inventory: su.rows, missUnits: su.missUnits, missValue: su.missValue } : {}) });
     // El inventario de la app queda igual a lo contado.
     su.rows.forEach(r => { if (r.missing !== 0) b.update(doc(db, 'items', r.itemId), { stock: r.counted }); });

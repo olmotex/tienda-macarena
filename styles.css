@@ -208,3 +208,9 @@ img.ph{display:block;width:100%;height:100%;object-fit:cover;border-radius:inher
 .money .disc{display:block;font-weight:800;font-size:.8rem;color:var(--good)}
 .pill.promo{background:#ffe9a8}
 .promo-row .field{flex:1}
+/* fiados */
+.paybtn.credit{background:#ffe9a8}
+.fiadosbtn{margin-left:auto;border:0;border-radius:999px;background:#ffe9a8;color:#2b1622;font:inherit;font-weight:800;padding:6px 12px;cursor:pointer}
+.whochips{display:flex;flex-wrap:wrap;gap:6px;justify-content:center}
+#whoname{width:100%;font:inherit;font-size:1.2rem;padding:12px;border-radius:14px;border:2px solid var(--line);background:var(--bg);color:var(--ink);text-align:center}
+.sale.debt .okbtn{white-space:nowrap}
