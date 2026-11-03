@@ -345,7 +345,24 @@ function loadCart() { try { cart = JSON.parse(lsGet(CART_KEY()) || '[]'); } catc
 function saveCart() { lsSet(CART_KEY(), cart.length ? JSON.stringify(cart) : null); }
 const inCart = id => cart.filter(x => x === id).length;
 const cartItems = () => cart.map(itemById).filter(Boolean);
-const cartTotal = () => cartItems().reduce((a, i) => a + i.price, 0);
+// Promo por cantidad: "2 por $800". Cada grupo completo se cobra al precio de promo; lo que sobra, a precio normal.
+const hasPromo = i => i && Number.isInteger(i.promoQty) && i.promoQty >= 2 && i.promoPrice > 0;
+const promoTxt = i => `${i.promoQty} por ${fmt(i.promoPrice)}`;
+function priceLines(ci) {
+  const seen = new Map();
+  ci.forEach(i => seen.set(i.id, (seen.get(i.id) || 0) + 1));
+  const done = new Map();
+  return ci.map(i => {
+    const k = done.get(i.id) || 0; done.set(i.id, k + 1);
+    if (!hasPromo(i)) return { it: i, price: i.price, promo: false };
+    const q = i.promoQty, inPromo = Math.floor(seen.get(i.id) / q) * q;
+    if (k >= inPromo) return { it: i, price: i.price, promo: false };
+    const base = Math.floor(i.promoPrice / q), extra = i.promoPrice - base * q;
+    return { it: i, price: base + ((k % q) < extra ? 1 : 0), promo: true };
+  });
+}
+const cartTotal = () => priceLines(cartItems()).reduce((a, l) => a + l.price, 0);
+const cartFull = () => cartItems().reduce((a, i) => a + i.price, 0);
 // Agrupa las ventas del turno por cliente (ticket). Las ventas viejas sin ticket cuentan solas.
 function tickets(sales) {
   const m = new Map();
@@ -368,7 +385,7 @@ function renderKid() {
     return `<button class="candy${c ? ' picked' : ''}" data-sell="${i.id}" style="--c:${esc(i.color)}" aria-label="Agregar ${esc(i.name)} de ${fmt(i.price)}">
       ${c ? `<span class="cnt num">${c}</span>` : ''}
       ${low ? `<span class="low">Quedan ${left}</span>` : ''}
-      <span class="em">${pic(i)}</span><span class="nm">${esc(i.name)}</span><span class="pr num">${fmt(i.price)}</span></button>`; }).join('')}
+      <span class="em">${pic(i)}</span><span class="nm">${esc(i.name)}</span><span class="pr num">${fmt(i.price)}</span>${hasPromo(i) ? `<span class="promo num">🎉 ${promoTxt(i)}</span>` : ''}</button>`; }).join('')}
     ${items.length ? '' : '<p class="muted">No hay productos todavía. Los papás los agregan desde su celular.</p>'}
   </div>
   <div class="bar cart"><div class="bar-in">
@@ -377,7 +394,7 @@ function renderKid() {
       <div class="chips">${ci.map((i, n) => `<button class="chip" data-unpick="${n}" style="--c:${esc(i.color)}" aria-label="Quitar ${esc(i.name)}">${pic(i)}<small>✕</small></button>`).join('')}</div>
       <div class="cart-foot">
         <button class="clearcart" id="clearcart" aria-label="Borrar esta venta">🗑️</button>
-        <div class="money"><small>Total</small><b class="num">${fmt(cartTotal())}</b></div>
+        <div class="money"><small>Total</small><b class="num">${fmt(cartTotal())}</b>${cartFull() > cartTotal() ? `<span class="disc num">🎉 ¡Descuento! −${fmt(cartFull() - cartTotal())}</span>` : ''}</div>
         <button class="pay" id="pay">✅ Cobrar</button>
       </div>`
     : `<div class="cart-empty">🛒 <span>Toca lo que te compran</span></div>`}
@@ -412,8 +429,8 @@ function pay(method) {
   const ci = cartItems(); if (!ci.length) { cart = []; saveCart(); renderKid(); return; }
   const sum = cartTotal(), ticket = uid(), t = Date.now(), counts = new Map();
   const b = writeBatch(db);
-  ci.forEach(it => {
-    b.set(doc(salesCol()), { itemId: it.id, name: it.name, emoji: it.emoji, price: it.price, t, by: role, ticket, pay: method });
+  priceLines(ci).forEach(({ it, price, promo }) => {
+    b.set(doc(salesCol()), { itemId: it.id, name: it.name, emoji: it.emoji, price, t, by: role, ticket, pay: method, ...(promo ? { promo: true } : {}) });
     counts.set(it.id, (counts.get(it.id) || 0) + 1);
   });
   counts.forEach((n, id) => b.update(doc(db, 'items', id), { stock: increment(-n) }));
@@ -460,6 +477,15 @@ function renderParent() {
   <div class="panel">${({ hoy: pHoy, cierre: pCierre, dulces: pDulces, historial: pHist, ajustes: pAjustes })[tab]()}</div>`;
 }
 
+const discountTotal = sales => sales.filter(x => x.promo).reduce((a, x) => { const it = itemById(x.itemId); return a + (it ? Math.max(0, it.price - x.price) : 0); }, 0);
+// Ganancia = lo que se cobró menos lo que costó (solo productos con costo anotado).
+function profitOf(sales) {
+  let profit = 0, withCost = 0, missing = 0;
+  sales.forEach(x => { const it = itemById(x.itemId); if (it && it.cost > 0) { profit += x.price - it.cost; withCost++; } else missing++; });
+  return { profit, withCost, missing };
+}
+const profitKpi = sales => { const pf = profitOf(sales); if (!pf.withCost) return '';
+  return `<div class="kpi" style="grid-column:1/-1"><span class="lbl">💰 Ganancia (vendido − costo)</span><b class="num" style="color:var(--good)">${fmt(pf.profit)}</b>${pf.missing ? `<small class="muted">${pf.missing} sin costo anotado, no se cuentan</small>` : ''}</div>`; };
 function pHoy() {
   const sales = S.sales, sum = total(sales), rows = byItem(sales), tk = tickets(sales);
   return `
@@ -469,7 +495,8 @@ function pHoy() {
     <div class="kpi"><span class="lbl">Ventas · productos</span><b class="num">${tk.length} · ${sales.length}</b></div>
     <div class="kpi"><span class="lbl">💵 Efectivo</span><b class="num">${fmt(cashTotal(sales))}</b></div>
     <div class="kpi"><span class="lbl">📱 Transferencias</span><b class="num">${fmt(transferTotal(sales))}</b>
-      ${pendingTransfers(sales).length ? `<small class="warnt">${pendingTransfers(sales).length} por confirmar</small>` : ''}</div></div>
+      ${pendingTransfers(sales).length ? `<small class="warnt">${pendingTransfers(sales).length} por confirmar</small>` : ''}</div>${profitKpi(sales)}</div>
+    ${sales.some(x => x.promo) ? `<p class="muted" style="margin:0">🎉 ${sales.filter(x => x.promo).length} unidades vendidas con promo${discountTotal(sales) ? ` (descuento dado: ${fmt(discountTotal(sales))})` : ''}</p>` : ''}
     <button class="btn big" data-tab="cierre">Cerrar caja</button>
   </div>
   <div class="card"><h2>Por producto</h2>
@@ -569,6 +596,12 @@ function itemForm(it) {
       <div class="field"><label class="lbl" for="e-stock">Unidades en la tienda</label><input id="e-stock" inputmode="numeric" value="${it.stock ?? 0}"></div>
       <div class="field"><label class="lbl" for="e-add">Llegaron más (sumar)</label><input id="e-add" inputmode="numeric" placeholder="0" value="${esc(it.add || '')}"></div>
     </div>
+    <div class="field"><label class="lbl" for="e-cost">Costo por unidad (lo que le cuesta a la tienda, opcional)</label><input id="e-cost" inputmode="numeric" placeholder="Ej: 413" value="${it.cost || ''}"></div>
+    ${it.cost > 0 && it.price > 0 ? `<small class="muted num">Ganancia por unidad: ${fmt(it.price - it.cost)} (${Math.round((it.price - it.cost) / it.price * 100)}%)</small>` : ''}
+    <span class="lbl">Promo por cantidad (opcional)</span>
+    <div class="row promo-row"><div class="field"><label class="lbl" for="e-pq">Llevando</label><input id="e-pq" inputmode="numeric" placeholder="2" value="${it.promoQty || ''}"></div>
+      <div class="field"><label class="lbl" for="e-pp">pagan en total</label><input id="e-pp" inputmode="numeric" placeholder="Ej: 800" value="${it.promoPrice || ''}"></div></div>
+    <small class="muted">Ej: llevando <b>2</b> pagan <b>800</b>. Déjalo vacío si no tiene promo.</small>
     <span class="lbl">Foto o dibujo</span>
     <div class="photorow"><div class="sw big" style="--c:${esc(it.color)}">${pic(it)}</div>
       <label class="btn ghost photobtn">📷 ${it.photo ? 'Cambiar foto' : 'Tomar o escoger foto'}<input type="file" id="e-photo" accept="image/*" hidden></label>
@@ -613,13 +646,18 @@ function parseBulk(text) {
     let name = (parts[0] || '').replace(/^["']|["']$/g, '').trim(), emoji = '';
     const em = name.match(/^(\p{Extended_Pictographic}(?:️|‍\p{Extended_Pictographic})*)\s*/u);
     if (em) { emoji = em[1]; name = name.slice(em[0].length).trim(); }
-    const price = num(parts[1]), stock = parts[2] !== undefined && /\d/.test(parts[2]) ? num(parts[2]) : null;
+    let promo = null; const rest = [];
+    let cost = null;
+    parts.slice(1).forEach(x => { const pm = x.match(/^(\d+)\s*(?:x|por)\s*\$?\s*([\d.]+)$/i), cm = x.match(/^costo\s*:?\s*\$?\s*([\d.]+)$/i);
+      if (pm && !promo) promo = { q: num(pm[1]), p: num(pm[2]) }; else if (cm) cost = num(cm[1]) || null; else rest.push(x); });
+    const price = num(rest[0]), stock = rest[1] !== undefined && /\d/.test(rest[1]) ? num(rest[1]) : null;
+    if (promo && (promo.q < 2 || !promo.p || promo.p >= promo.q * price)) promo = null;
     if (!name || !price) { bad.push({ n: ix + 1, line }); return; }
     name = name.slice(0, 22);
     const key = plain(name);
-    if (seen.has(key)) { const r = seen.get(key); r.price = price; if (stock !== null) r.stock = (r.stock || 0) + stock; return; }
+    if (seen.has(key)) { const r = seen.get(key); r.price = price; if (promo) r.promo = promo; if (cost) r.cost = cost; if (stock !== null) r.stock = (r.stock || 0) + stock; return; }
     const ex = S.items.find(i => plain(i.name) === key);
-    const r = { name, price, stock, emoji: emoji || (ex ? ex.emoji : guessEmoji(name)), ex };
+    const r = { name, price, stock, promo, cost, emoji: emoji || (ex ? ex.emoji : guessEmoji(name)), ex };
     seen.set(key, r); rows.push(r);
   });
   return { rows, bad };
@@ -630,15 +668,15 @@ function bulkPreview(text) {
   const nNew = rows.filter(r => !r.ex).length, nOld = rows.length - nNew;
   return `<p><b>${nNew ? `${nNew} producto${nNew === 1 ? '' : 's'} nuevo${nNew === 1 ? '' : 's'}` : ''}${nNew && nOld ? ' y ' : ''}${nOld ? `${nOld} que ya existe${nOld === 1 ? '' : 'n'} (se actualiza${nOld === 1 ? '' : 'n'})` : ''}</b></p>
   ${rows.map((r, i) => `<div class="item"><div class="sw" style="--c:${r.ex ? esc(r.ex.color) : COLORS[(S.items.length + i) % COLORS.length]}">${r.ex && r.ex.photo ? pic(r.ex) : esc(r.emoji)}</div>
-    <div class="t"><b>${esc(r.name)}</b><small class="num">${fmt(r.price)} · ${r.ex ? (r.stock !== null ? `ya existe: tenía ${r.ex.stock}, ahora ${r.ex.stock + r.stock}` : `ya existe: quedan ${r.ex.stock} und.`) : `${r.stock ?? 0} und.`}</small></div></div>`).join('')}
+    <div class="t"><b>${esc(r.name)}${r.promo ? ` <span class="pill promo num">🎉 ${r.promo.q} por ${fmt(r.promo.p)}</span>` : ''}</b><small class="num">${fmt(r.price)}${r.cost ? ` (costo ${fmt(r.cost)})` : ''} · ${r.ex ? (r.stock !== null ? `ya existe: tenía ${r.ex.stock}, ahora ${r.ex.stock + r.stock}` : `ya existe: quedan ${r.ex.stock} und.`) : `${r.stock ?? 0} und.`}</small></div></div>`).join('')}
   ${bad.length ? `<div class="warnt">No entendí ${bad.length === 1 ? 'esta línea' : 'estas líneas'} (falta el nombre o el precio):<br>${bad.map(b => `<small>Línea ${b.n}: ${esc(b.line.slice(0, 40))}</small>`).join('<br>')}</div>` : ''}`;
 }
 function bulkSave(text) {
   const { rows } = parseBulk(text); if (!rows.length) { toast('Escribe al menos un producto con su precio'); return; }
   let k = 0; const base = Date.now();
   const ops = rows.map(r => r.ex
-    ? b => b.update(doc(db, 'items', r.ex.id), { price: r.price, ...(r.stock !== null ? { stock: increment(r.stock) } : {}) })
-    : b => b.set(doc(itemsCol()), { name: r.name, emoji: r.emoji, price: r.price, color: COLORS[(S.items.length + k++) % COLORS.length], stock: r.stock ?? 0, active: true, example: false, order: base + k }));
+    ? b => b.update(doc(db, 'items', r.ex.id), { price: r.price, ...(r.promo ? { promoQty: r.promo.q, promoPrice: r.promo.p } : {}), ...(r.cost ? { cost: r.cost } : {}), ...(r.stock !== null ? { stock: increment(r.stock) } : {}) })
+    : b => b.set(doc(itemsCol()), { name: r.name, emoji: r.emoji, price: r.price, color: COLORS[(S.items.length + k++) % COLORS.length], stock: r.stock ?? 0, promoQty: r.promo ? r.promo.q : null, promoPrice: r.promo ? r.promo.p : null, cost: r.cost || null, active: true, example: false, order: base + k }));
   bulk = null; render();
   runOps(ops).then(() => toast(`Listo: ${rows.length} producto${rows.length === 1 ? '' : 's'} guardado${rows.length === 1 ? '' : 's'}`),
     err => { console.error(err); toast('No se pudo guardar. Revisa el internet.'); });
@@ -652,7 +690,7 @@ function pDulces() {
   ${editing ? itemForm(editing) : ''}
   ${bulk !== null ? `<div class="card" id="bulk">
     <h2>Agregar varios productos</h2>
-    <p class="muted">Escribe un producto por línea: <b>nombre, precio, unidades</b>. También puedes pegar las columnas desde Excel o Google Sheets.</p>
+    <p class="muted">Escribe un producto por línea: <b>nombre, precio, unidades</b>. Si tiene promo o costo, agrégalos al final: <b>Chupeta, 500, 20, 2 por 800, costo 300</b>. También puedes pegar las columnas desde Excel o Google Sheets.</p>
     <textarea id="bulktext" rows="7" placeholder="Chupeta, 500, 20&#10;Chocolatina, 1500, 12&#10;Gomitas, 300, 30">${esc(bulk)}</textarea>
     <div id="bulkprev">${bulkPreview(bulk)}</div>
     <div class="row"><button class="btn" id="bulksave">Guardar todos</button><button class="btn ghost" id="bulkcancel">Cancelar</button></div>
@@ -663,7 +701,7 @@ function pDulces() {
     <div class="row" style="justify-content:space-between"><h2>${S.items.length} productos</h2><div class="row"><button class="btn ghost" id="bulk-open">+ Agregar varios</button><button class="btn" id="add">+ Agregar producto</button></div></div>
     <div>${S.items.map(i => { const st = i.stock < 0 ? `<span class="pill out">Se vendieron ${-i.stock} de más: actualiza las unidades</span>` : i.stock === 0 ? '<span class="pill out">Agotado</span>' : i.stock <= 3 ? `<span class="pill low">Quedan ${i.stock}</span>` : `<span class="pill">${i.stock} und.</span>`;
       return `<div class="item"><div class="sw" style="--c:${esc(i.color)}">${pic(i)}</div>
-      <div class="t"><b>${esc(i.name)}${i.active === false ? ' <span class="pill">oculto</span>' : ''}</b><small class="num">${fmt(i.price)} · </small>${st}</div>
+      <div class="t"><b>${esc(i.name)}${i.active === false ? ' <span class="pill">oculto</span>' : ''}</b><small class="num">${fmt(i.price)}${i.cost > 0 ? ` <span class="muted">(costo ${fmt(i.cost)})</span>` : ''} · </small>${st}${hasPromo(i) ? ` <span class="pill promo num">🎉 ${promoTxt(i)}</span>` : ''}</div>
       <button class="btn ghost" data-edit="${i.id}">Editar</button></div>`; }).join('')}</div>
   </div>
   ${S.items.length ? seedCard : ''}`;
@@ -673,13 +711,15 @@ function pHist() {
   const cl = S.closings;
   if (!cl.length) return '<div class="card"><h2>Historial de cierres</h2><p class="muted">Aquí quedan guardados los cierres de caja. Todavía no hay ninguno.</p></div>';
   const tot = cl.reduce((a, c) => a + c.sales, 0), diffs = cl.reduce((a, c) => a + (c.counted - c.expected), 0);
+  const prof = cl.reduce((a, c) => a + (c.profit || 0), 0), hasProf = cl.some(c => c.profit !== undefined);
   const missV = cl.reduce((a, c) => a + (c.missValue || 0), 0), missU = cl.reduce((a, c) => a + (c.missUnits || 0), 0);
   return `<div class="card"><div class="kpis">
     <div class="kpi"><span class="lbl">Vendido en total</span><b class="num">${fmt(tot)}</b></div>
     <div class="kpi"><span class="lbl">Diferencias</span><b class="num" style="color:${diffs === 0 ? 'var(--good)' : diffs < 0 ? 'var(--bad)' : 'var(--warn)'}">${diffs > 0 ? '+' : ''}${fmt(diffs).replace('$-', '-$')}</b></div>
+    ${hasProf ? `<div class="kpi" style="grid-column:1/-1"><span class="lbl">💰 Ganancia en total</span><b class="num" style="color:var(--good)">${fmt(prof)}</b></div>` : ''}
     <div class="kpi" style="grid-column:1/-1"><span class="lbl">Productos que faltaron en los conteos</span><b class="num" style="color:${missU ? 'var(--bad)' : 'var(--good)'}">${missU ? `${missU} = ${fmt(missV)}` : '0'}</b></div></div></div>
   <div class="card"><h2>Cierres</h2>${cl.slice().reverse().map(c => { const d = c.counted - c.expected;
-    return `<details class="hist"><summary><span>${esc(dt(c.end))}<br><small class="muted num">${c.count} productos · ${fmt(c.sales)}</small></span>
+    return `<details class="hist"><summary><span>${esc(dt(c.end))}<br><small class="muted num">${c.count} productos · ${fmt(c.sales)}${c.profit !== undefined ? ` · ganancia ${fmt(c.profit)}` : ''}</small></span>
       <span style="display:grid;gap:4px;justify-items:end"><span class="pill ${d === 0 ? '' : d < 0 ? 'out' : 'low'} num">${d === 0 ? 'Plata cuadró' : d < 0 ? 'Faltó ' + fmt(-d) : 'Sobró ' + fmt(d)}</span>
       ${c.transferPending ? `<span class="pill out num">Transferencias sin confirmar ${fmt(c.transferPending)}</span>` : ''}
       ${c.inventory ? `<span class="pill ${c.missUnits ? 'out' : ''} num">${c.missUnits ? `Faltaron ${c.missUnits} productos (${fmt(c.missValue)})` : 'Productos cuadraron'}</span>` : ''}</span></summary>
@@ -699,7 +739,7 @@ function backupJSON() {
   const strip = ({ id, ...rest }) => ({ id, ...rest });
   return JSON.stringify({
     items: S.items.map(strip),
-    turn: { start: turn().start, base: turn().base || 0, sales: S.sales.map(s => ({ id: s.id, itemId: s.itemId, name: s.name, emoji: s.emoji, price: s.price, t: s.t, by: s.by, ticket: s.ticket || null, pay: payOf(s), ok: !!s.ok })) },
+    turn: { start: turn().start, base: turn().base || 0, sales: S.sales.map(s => ({ id: s.id, itemId: s.itemId, name: s.name, emoji: s.emoji, price: s.price, t: s.t, by: s.by, ticket: s.ticket || null, pay: payOf(s), ok: !!s.ok, promo: !!s.promo })) },
     closings: S.closings.map(({ id, ...c }) => c)
   });
 }
@@ -741,10 +781,10 @@ async function replaceAll(d, seed) {
   else {
     (d.items || []).forEach((i, n) => ops.push(b => b.set(doc(db, 'items', String(i.id || uid())), {
       name: String(i.name || 'Producto'), emoji: String(i.emoji || '🍬'), price: num(i.price), color: String(i.color || COLORS[n % COLORS.length]),
-      stock: Math.round(Number(i.stock) || 0), photo: typeof i.photo === 'string' && i.photo.startsWith('data:image/') ? i.photo : null, active: i.active !== false, example: !!i.example, order: typeof i.order === 'number' ? i.order : n })));
+      stock: Math.round(Number(i.stock) || 0), photo: typeof i.photo === 'string' && i.photo.startsWith('data:image/') ? i.photo : null, cost: num(i.cost) || null, promoQty: num(i.promoQty) >= 2 ? num(i.promoQty) : null, promoPrice: num(i.promoQty) >= 2 && num(i.promoPrice) ? num(i.promoPrice) : null, active: i.active !== false, example: !!i.example, order: typeof i.order === 'number' ? i.order : n })));
     const t = d.turn || {};
     (t.sales || []).forEach(s => ops.push(b => b.set(doc(db, 'sales', String(s.id || uid())), {
-      itemId: String(s.itemId), name: String(s.name), emoji: String(s.emoji), price: num(s.price), t: Number(s.t) || Date.now(), by: s.by === 'parent' ? 'parent' : 'kid', ...(s.ticket ? { ticket: String(s.ticket) } : {}), pay: s.pay === 'transfer' ? 'transfer' : 'cash', ok: !!s.ok })));
+      itemId: String(s.itemId), name: String(s.name), emoji: String(s.emoji), price: num(s.price), t: Number(s.t) || Date.now(), by: s.by === 'parent' ? 'parent' : 'kid', ...(s.ticket ? { ticket: String(s.ticket) } : {}), pay: s.pay === 'transfer' ? 'transfer' : 'cash', ok: !!s.ok, ...(s.promo ? { promo: true } : {}) })));
     (d.closings || []).forEach(c => ops.push(b => b.set(doc(closingsCol()), c)));
     ops.push(b => b.set(turnDoc(), { start: Number(t.start) || Date.now(), base: num(t.base) }));
   }
@@ -820,7 +860,8 @@ app.addEventListener('click', e => {
     const pendV = pendingTransfers(S.sales).reduce((a, g) => a + total(g.sales), 0);
     const b = writeBatch(db);
     const su = invSummary(invRows());
-    b.set(doc(closingsCol()), { start: turn().start, end: Date.now(), base, sales, expected: base + cash, cashSales: cash, transferSales: tr, transferPending: pendV, counted: countedValue() || 0, count: S.sales.length, items: byItem(S.sales), note,
+    const pf = profitOf(S.sales);
+    b.set(doc(closingsCol()), { ...(pf.withCost ? { profit: pf.profit } : {}), start: turn().start, end: Date.now(), base, sales, expected: base + cash, cashSales: cash, transferSales: tr, transferPending: pendV, counted: countedValue() || 0, count: S.sales.length, items: byItem(S.sales), note,
       ...(su.counted ? { inventory: su.rows, missUnits: su.missUnits, missValue: su.missValue } : {}) });
     // El inventario de la app queda igual a lo contado.
     su.rows.forEach(r => { if (r.missing !== 0) b.update(doc(db, 'items', r.itemId), { stock: r.counted }); });
@@ -843,7 +884,10 @@ app.addEventListener('click', e => {
   if (t.id === 'e-del-yes') { const b = writeBatch(db); b.delete(doc(db, 'items', editing.id)); commit(b, 'Producto borrado'); editing = null; confirmKey = null; render(); return; }
   if (t.id === 'e-save') { readForm();
     if (!editing.name.trim()) { toast('Ponle un nombre al producto'); return; }
-    const data = { name: editing.name.trim(), emoji: editing.emoji || '🍬', photo: editing.photo || null, price: editing.price, color: editing.color, stock: editing.stock + num(editing.add), active: editing.active, example: false };
+    const pq = editing.promoQty || 0, pp = editing.promoPrice || 0, promoOn = pq || pp;
+    if (promoOn && (pq < 2 || !pp)) { toast('En la promo pon cuántos llevan (2 o más) y cuánto pagan'); return; }
+    if (promoOn && pp >= pq * editing.price) { toast(`La promo debe salir más barata que ${fmt(pq * editing.price)}`); return; }
+    const data = { name: editing.name.trim(), emoji: editing.emoji || '🍬', photo: editing.photo || null, promoQty: promoOn ? pq : null, promoPrice: promoOn ? pp : null, cost: editing.cost || null, price: editing.price, color: editing.color, stock: editing.stock + num(editing.add), active: editing.active, example: false };
     const b = writeBatch(db);
     if (editing.id) b.update(doc(db, 'items', editing.id), data);
     else b.set(doc(itemsCol()), { ...data, order: Date.now() });
@@ -873,6 +917,8 @@ function readForm() {
   if (!g('e-name')) return;
   editing.name = g('e-name').value; editing.price = num(g('e-price').value); editing.stock = num(g('e-stock').value);
   editing.add = g('e-add').value;
+  editing.cost = num(g('e-cost').value);
+  editing.promoQty = num(g('e-pq').value); editing.promoPrice = num(g('e-pp').value);
   const em = g('e-emoji').value.trim(); if (em) editing.emoji = em; editing.active = g('e-active').checked;
 }
 let baseT;
