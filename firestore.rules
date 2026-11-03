@@ -1,0 +1,44 @@
+rules_version = '2';
+// Reglas de seguridad de la tienda de Macarena.
+// Pegar en Firebase > Firestore Database > Reglas > Publicar.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isParent() { return request.auth != null && request.auth.token.email == 'papas@tienda.app'; }
+    function isKid() { return request.auth != null && request.auth.token.email == 'macarena@tienda.app'; }
+    function isFamily() { return isParent() || isKid(); }
+    function item(id) { return get(/databases/$(database)/documents/items/$(id)).data; }
+
+    // Dulces: los papás hacen todo. Macarena solo puede bajar o subir el inventario de a 1 (vender / deshacer).
+    match /items/{id} {
+      allow read: if isFamily();
+      allow create, delete: if isParent();
+      allow update: if isParent() || (isKid()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock'])
+        && (request.resource.data.stock == resource.data.stock - 1
+            || request.resource.data.stock == resource.data.stock + 1));
+    }
+
+    // Ventas del turno abierto: Macarena registra ventas al precio real y puede deshacer las suyas.
+    match /sales/{id} {
+      allow read: if isFamily();
+      allow create: if isParent() || (isKid()
+        && request.resource.data.keys().hasOnly(['itemId', 'name', 'emoji', 'price', 't', 'by'])
+        && request.resource.data.by == 'kid'
+        && exists(/databases/$(database)/documents/items/$(request.resource.data.itemId))
+        && request.resource.data.price == item(request.resource.data.itemId).price);
+      allow update: if isParent();
+      allow delete: if isParent() || (isKid() && resource.data.by == 'kid');
+    }
+
+    // Turno (sencillo inicial, hora de apertura): Macarena solo lo ve.
+    match /meta/{doc} {
+      allow read: if isFamily();
+      allow write: if isParent();
+    }
+
+    // Cierres de caja e historial: solo papás.
+    match /closings/{id} {
+      allow read, write: if isParent();
+    }
+  }
+}
