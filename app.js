@@ -943,5 +943,13 @@ app.addEventListener('change', e => {
   } if (e.target.id === 'sound') { sound = e.target.checked; try { localStorage.setItem(SOUND_KEY, sound ? '1' : '0'); } catch (err) {} } });
 
 try { navigator.wakeLock && navigator.wakeLock.request('screen').catch(() => {}); } catch (e) {}
-if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('./sw.js').catch(() => {});
+// Busca versiones nuevas al abrir y al volver a la app; si hay una, recarga sola (una vez).
+if ('serviceWorker' in navigator && location.protocol === 'https:') {
+  const had = !!navigator.serviceWorker.controller; let reloaded = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (had && !reloaded) { reloaded = true; location.reload(); } });
+  navigator.serviceWorker.register('./sw.js').then(reg => {
+    reg.update().catch(() => {});
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reg.update().catch(() => {}); });
+  }).catch(() => {});
+}
 render();
