@@ -646,7 +646,9 @@ function bulkSave(text) {
 let bulk = null;
 function pDulces() {
   const ex = S.items.some(i => i.example);
-  return `
+  const seedCard = ex ? '' : `<div class="card" style="background:var(--soft)"><b>¿Quieren practicar primero?</b><span class="muted">Carga ${SAMPLE.length} productos de ejemplo para ver cómo funciona la tienda. Cuando estén listos, se borran con un botón y quedan solo los reales.</span>
+    <button class="btn ghost" id="seed">Cargar productos de ejemplo</button></div>`;
+  return `${S.items.length ? '' : seedCard}
   ${editing ? itemForm(editing) : ''}
   ${bulk !== null ? `<div class="card" id="bulk">
     <h2>Agregar varios productos</h2>
@@ -663,7 +665,8 @@ function pDulces() {
       return `<div class="item"><div class="sw" style="--c:${esc(i.color)}">${pic(i)}</div>
       <div class="t"><b>${esc(i.name)}${i.active === false ? ' <span class="pill">oculto</span>' : ''}</b><small class="num">${fmt(i.price)} · </small>${st}</div>
       <button class="btn ghost" data-edit="${i.id}">Editar</button></div>`; }).join('')}</div>
-  </div>`;
+  </div>
+  ${S.items.length ? seedCard : ''}`;
 }
 
 function pHist() {
@@ -845,6 +848,7 @@ app.addEventListener('click', e => {
     if (editing.id) b.update(doc(db, 'items', editing.id), data);
     else b.set(doc(itemsCol()), { ...data, order: Date.now() });
     commit(b, 'Guardado'); editing = null; render(); return; }
+  if (t.id === 'seed') { t.disabled = true; runOps(sampleOps()).then(() => toast('Listo: productos de ejemplo cargados'), err => { console.error(err); toast('No se pudo. Revisa el internet.'); t.disabled = false; }); return; }
   if (t.id === 'clear') { confirmKey = 'clear'; render(); return; }
   if (t.id === 'clearyes') { const b = writeBatch(db); S.items.filter(i => i.example).forEach(i => b.delete(doc(db, 'items', i.id))); commit(b); confirmKey = null; render(); return; }
   // ajustes
