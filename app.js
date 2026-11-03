@@ -378,19 +378,35 @@ function pick(id, el) {
   const nb = app.querySelector(`[data-sell="${id}"]`); if (nb) nb.classList.add('pop');
 }
 function unpick(n) { cart.splice(n, 1); saveCart(); renderKid(); }
-function pay() {
+// Al cobrar, Macarena elige cómo le pagaron: billetes (efectivo) o transferencia.
+function askPay() {
+  if (!cartItems().length) { cart = []; saveCart(); renderKid(); return; }
+  const o = document.createElement('div'); o.className = 'overlay'; o.id = 'askpay';
+  o.innerHTML = `<div class="pinbox paybox" role="dialog" aria-label="Cómo te pagaron"><h2>¿Cómo te pagaron?</h2>
+    <b class="num paytotal">${fmt(cartTotal())}</b>
+    <button class="paybtn cash" data-paywith="cash"><span>💵</span>Billetes o monedas</button>
+    <button class="paybtn transfer" data-paywith="transfer"><span>📱</span>Transferencia</button>
+    <button class="btn ghost big" data-paywith="">Volver</button></div>`;
+  o.addEventListener('click', e => {
+    if (e.target === o) { o.remove(); return; }
+    const b = e.target.closest('[data-paywith]'); if (!b) return;
+    o.remove(); if (b.dataset.paywith) pay(b.dataset.paywith);
+  });
+  document.body.appendChild(o);
+}
+function pay(method) {
   const ci = cartItems(); if (!ci.length) { cart = []; saveCart(); renderKid(); return; }
   const sum = cartTotal(), ticket = uid(), t = Date.now(), counts = new Map();
   const b = writeBatch(db);
   ci.forEach(it => {
-    b.set(doc(salesCol()), { itemId: it.id, name: it.name, emoji: it.emoji, price: it.price, t, by: role, ticket });
+    b.set(doc(salesCol()), { itemId: it.id, name: it.name, emoji: it.emoji, price: it.price, t, by: role, ticket, pay: method });
     counts.set(it.id, (counts.get(it.id) || 0) + 1);
   });
   counts.forEach((n, id) => b.update(doc(db, 'items', id), { stock: increment(-n) }));
   commit(b);
   cart = []; saveCart(); cashSound(); renderKid();
   const o = document.createElement('div'); o.className = 'overlay party';
-  o.innerHTML = `<div class="partybox"><div class="big">🎉</div><h2>¡Venta lista!</h2><b class="num">${fmt(sum)}</b><span>${ci.map(i => esc(i.emoji)).join(' ')}</span></div>`;
+  o.innerHTML = `<div class="partybox"><div class="big">🎉</div><h2>¡Venta lista!</h2><b class="num">${fmt(sum)}</b><span>${method === 'transfer' ? '📱 Transferencia' : '💵 Billetes'}</span><span>${ci.map(i => esc(i.emoji)).join(' ')}</span></div>`;
   o.addEventListener('click', () => o.remove()); document.body.appendChild(o); setTimeout(() => o.remove(), 1800);
 }
 function cashSound() {
@@ -406,6 +422,14 @@ function cashSound() {
 }
 
 // ---------- MODO PAPÁS ----------
+const payOf = s => s.pay === 'transfer' ? 'transfer' : 'cash';
+const cashTotal = sales => total(sales.filter(s => payOf(s) === 'cash'));
+const transferTotal = sales => total(sales.filter(s => payOf(s) === 'transfer'));
+const pendingTransfers = sales => tickets(sales).filter(g => payOf(g.sales[0]) === 'transfer' && !g.sales.every(s => s.ok));
+function transferBtn(g) {
+  const ok = g.sales.every(s => s.ok);
+  return `<button class="okbtn${ok ? ' on' : ''}" data-okticket="${esc(g.id)}" aria-pressed="${ok}">${ok ? '✓ Llegó' : '¿Llegó?'}</button>`;
+}
 function byItem(sales) {
   const m = new Map();
   sales.forEach(s => { const r = m.get(s.itemId) || { name: s.name, emoji: s.emoji, qty: 0, sum: 0 }; r.qty++; r.sum += s.price; m.set(s.itemId, r); });
@@ -428,7 +452,10 @@ function pHoy() {
   <div class="card">
     <div class="lbl">Turno abierto desde ${esc(dt(turn().start))}</div>
     <div class="kpis"><div class="kpi"><span class="lbl">Vendido</span><b class="num">${fmt(sum)}</b></div>
-    <div class="kpi"><span class="lbl">Ventas · dulces</span><b class="num">${tk.length} · ${sales.length}</b></div></div>
+    <div class="kpi"><span class="lbl">Ventas · dulces</span><b class="num">${tk.length} · ${sales.length}</b></div>
+    <div class="kpi"><span class="lbl">💵 Efectivo</span><b class="num">${fmt(cashTotal(sales))}</b></div>
+    <div class="kpi"><span class="lbl">📱 Transferencias</span><b class="num">${fmt(transferTotal(sales))}</b>
+      ${pendingTransfers(sales).length ? `<small class="warnt">${pendingTransfers(sales).length} por confirmar</small>` : ''}</div></div>
     <button class="btn big" data-tab="cierre">Cerrar caja</button>
   </div>
   <div class="card"><h2>Por dulce</h2>
@@ -438,8 +465,8 @@ function pHoy() {
   </div>
   <div class="card"><h2>Cada venta</h2>
     <p class="muted" style="margin:0">Si una venta quedó mal, bórrala aquí. Los dulces vuelven al inventario.</p>
-    ${tk.length ? tk.map((g, n) => ({ g, n: n + 1 })).reverse().map(({ g, n }) => `<div class="sale"><span><b>Venta ${n}</b> <span class="muted num">· ${hr(g.t)}${g.by === 'parent' ? ' · papás' : ''}</span><br>${g.sales.map(s => esc(s.emoji)).join(' ')}</span>
-      <span class="row" style="gap:4px;flex-wrap:nowrap"><b class="num">${fmt(total(g.sales))}</b><button data-delticket="${esc(g.id)}">Borrar</button></span></div>`).join('') : '<p class="muted">Sin ventas.</p>'}
+    ${tk.length ? tk.map((g, n) => ({ g, n: n + 1 })).reverse().map(({ g, n }) => `<div class="sale"><span><b>Venta ${n}</b> ${payOf(g.sales[0]) === 'transfer' ? '📱' : '💵'} <span class="muted num">· ${hr(g.t)}${g.by === 'parent' ? ' · papás' : ''}</span><br>${g.sales.map(s => esc(s.emoji)).join(' ')}</span>
+      <span class="row" style="gap:4px;flex-wrap:nowrap">${payOf(g.sales[0]) === 'transfer' ? transferBtn(g) : ''}<b class="num">${fmt(total(g.sales))}</b><button data-delticket="${esc(g.id)}">Borrar</button></span></div>`).join('') : '<p class="muted">Sin ventas.</p>'}
   </div>`;
 }
 // Conteo de inventario: compara lo que la app espera que quede con lo que hay en físico.
@@ -456,7 +483,8 @@ function invSummary(rows) {
     extraUnits: extra.reduce((a, r) => a - r.missing, 0), counted: rows.length };
 }
 function pCierre() {
-  const sales = total(S.sales), base = turn().base || 0, expected = base + sales, c = countedValue();
+  const sales = total(S.sales), cash = cashTotal(S.sales), tr = transferTotal(S.sales), pend = pendingTransfers(S.sales);
+  const base = turn().base || 0, expected = base + cash, c = countedValue();
   let cls = 'none', title = 'Escribe cuánta plata hay', sub = '';
   if (c !== null) { const d = c - expected;
     if (d === 0) { cls = 'ok'; title = '¡Cuadra perfecto!'; sub = 'La plata coincide con las ventas.'; }
@@ -470,6 +498,7 @@ function pCierre() {
   </div>
   <div class="card">
     <h2>2. Cuenta la plata de la caja</h2>
+    <p class="muted" style="margin:0">Solo billetes y monedas. Las transferencias se revisan aparte (paso 3).</p>
     <div class="field"><label class="lbl" for="counted">Total contado</label><input id="counted" inputmode="numeric" value="${esc(counted)}" placeholder="Ej: 12500"></div>
     <details ${denTotal() ? 'open' : ''}><summary class="lbl" style="cursor:pointer">Contar por billetes y monedas</summary>
       <div class="denoms" style="margin-top:10px">${DENOMS.map(d => `<div class="den"><span class="num">${fmt(d)}</span>
@@ -478,7 +507,16 @@ function pCierre() {
     </details>
   </div>
   <div class="card">
-    <h2>3. Cuenta los dulces <span class="muted" style="font-size:.9rem">(recomendado)</span></h2>
+    <h2>3. Revisa las transferencias</h2>
+    ${tr ? `<p class="muted" style="margin:0">Mira en tu cuenta (Nequi, banco…) que cada una haya llegado y márcala.</p>
+      ${tickets(S.sales).map((g, n) => ({ g, n: n + 1 })).filter(({ g }) => payOf(g.sales[0]) === 'transfer').map(({ g, n }) => `<div class="sale"><span><b>Venta ${n}</b> <span class="muted num">· ${hr(g.t)}</span></span>
+        <span class="row" style="gap:6px;flex-wrap:nowrap"><b class="num">${fmt(total(g.sales))}</b>${transferBtn(g)}</span></div>`).join('')}
+      <div class="diff ${pend.length ? 'plus' : 'ok'}"><b class="num">${pend.length ? `Faltan por confirmar ${pend.length} = ${fmt(pend.reduce((a, g) => a + total(g.sales), 0))}` : `Llegaron todas: ${fmt(tr)}`}</b>
+        <span>${pend.length ? 'Si alguna no llegó, revisa con quien vendió antes de cerrar.' : 'Las transferencias cuadran.'}</span></div>`
+    : '<p class="muted" style="margin:0">No hubo transferencias en este turno.</p>'}
+  </div>
+  <div class="card">
+    <h2>4. Cuenta los dulces <span class="muted" style="font-size:.9rem">(recomendado)</span></h2>
     <p class="muted" style="margin:0">Cuenta cuántos quedan de verdad de cada dulce. Si hay menos de lo que dice la app, se vendieron sin anotarse.</p>
     ${(() => { const su = invSummary(invRows());
       return `<div class="invlist">${S.items.map(i => { const v = inv[i.id], has = v !== undefined && v !== '', m = has ? i.stock - (Number(v) || 0) : 0;
@@ -489,11 +527,13 @@ function pCierre() {
         <span>${su.missUnits ? 'Salieron dulces que no se anotaron en la app (o se regalaron o dañaron).' : `Contaste ${su.counted} de ${S.items.length} dulces.`}${su.extraUnits ? ` Hay ${su.extraUnits} de más: revisa si llegaron dulces que no se anotaron.` : ''}</span></div>` : ''}`; })()}
   </div>
   <div class="card">
-    <h2>4. Resultado</h2>
+    <h2>5. Resultado</h2>
     <div class="tw"><table><tbody>
       <tr><td>Ventas del turno (${S.sales.length} dulces)</td><td class="r num">${fmt(sales)}</td></tr>
+      <tr><td class="muted">− 📱 Pagadas por transferencia</td><td class="r num muted">${fmt(tr)}</td></tr>
+      <tr><td>💵 Ventas en efectivo</td><td class="r num">${fmt(cash)}</td></tr>
       <tr><td>+ Sencillo inicial</td><td class="r num">${fmt(base)}</td></tr>
-      <tr><td><b>Debería haber</b></td><td class="r num"><b>${fmt(expected)}</b></td></tr>
+      <tr><td><b>Debería haber en la caja</b></td><td class="r num"><b>${fmt(expected)}</b></td></tr>
       <tr><td>Hay en la caja</td><td class="r num">${c === null ? '—' : fmt(c)}</td></tr>
     </tbody></table></div>
     <div class="diff ${cls}"><b class="num">${title}</b><span>${sub}</span></div>
@@ -554,9 +594,11 @@ function pHist() {
   <div class="card"><h2>Cierres</h2>${cl.slice().reverse().map(c => { const d = c.counted - c.expected;
     return `<details class="hist"><summary><span>${esc(dt(c.end))}<br><small class="muted num">${c.count} dulces · ${fmt(c.sales)}</small></span>
       <span style="display:grid;gap:4px;justify-items:end"><span class="pill ${d === 0 ? '' : d < 0 ? 'out' : 'low'} num">${d === 0 ? 'Plata cuadró' : d < 0 ? 'Faltó ' + fmt(-d) : 'Sobró ' + fmt(d)}</span>
+      ${c.transferPending ? `<span class="pill out num">Transferencias sin confirmar ${fmt(c.transferPending)}</span>` : ''}
       ${c.inventory ? `<span class="pill ${c.missUnits ? 'out' : ''} num">${c.missUnits ? `Faltaron ${c.missUnits} dulces (${fmt(c.missValue)})` : 'Dulces cuadraron'}</span>` : ''}</span></summary>
       <div class="tw"><table><tbody>
-      <tr><td>Sencillo inicial</td><td class="r num">${fmt(c.base)}</td></tr><tr><td>Debía haber</td><td class="r num">${fmt(c.expected)}</td></tr>
+      ${c.transferSales !== undefined ? `<tr><td>💵 Efectivo</td><td class="r num">${fmt(c.cashSales)}</td></tr><tr><td>📱 Transferencias${c.transferPending ? ` <span style="color:var(--bad)">(sin confirmar ${fmt(c.transferPending)})</span>` : ''}</td><td class="r num">${fmt(c.transferSales)}</td></tr>` : ''}
+      <tr><td>Sencillo inicial</td><td class="r num">${fmt(c.base)}</td></tr><tr><td>Debía haber en la caja</td><td class="r num">${fmt(c.expected)}</td></tr>
       <tr><td>Se contó</td><td class="r num">${fmt(c.counted)}</td></tr>
       ${(c.items || []).map(r => `<tr><td class="muted">${esc(r.emoji)} ${esc(r.name)} × ${r.qty}</td><td class="r num muted">${fmt(r.sum)}</td></tr>`).join('')}
       ${(c.inventory || []).filter(r => r.missing).map(r => `<tr><td style="color:${r.missing > 0 ? 'var(--bad)' : 'var(--warn)'}">${esc(r.emoji)} ${esc(r.name)}: la app decía ${r.expected}, había ${r.counted}</td><td class="r num" style="color:${r.missing > 0 ? 'var(--bad)' : 'var(--warn)'}">${r.missing > 0 ? '-' + fmt(r.missing * r.price) : '+' + (-r.missing)}</td></tr>`).join('')}
@@ -570,7 +612,7 @@ function backupJSON() {
   const strip = ({ id, ...rest }) => ({ id, ...rest });
   return JSON.stringify({
     items: S.items.map(strip),
-    turn: { start: turn().start, base: turn().base || 0, sales: S.sales.map(s => ({ id: s.id, itemId: s.itemId, name: s.name, emoji: s.emoji, price: s.price, t: s.t, by: s.by, ticket: s.ticket || null })) },
+    turn: { start: turn().start, base: turn().base || 0, sales: S.sales.map(s => ({ id: s.id, itemId: s.itemId, name: s.name, emoji: s.emoji, price: s.price, t: s.t, by: s.by, ticket: s.ticket || null, pay: payOf(s), ok: !!s.ok })) },
     closings: S.closings.map(({ id, ...c }) => c)
   });
 }
@@ -615,7 +657,7 @@ async function replaceAll(d, seed) {
       stock: Math.round(Number(i.stock) || 0), active: i.active !== false, example: !!i.example, order: typeof i.order === 'number' ? i.order : n })));
     const t = d.turn || {};
     (t.sales || []).forEach(s => ops.push(b => b.set(doc(db, 'sales', String(s.id || uid())), {
-      itemId: String(s.itemId), name: String(s.name), emoji: String(s.emoji), price: num(s.price), t: Number(s.t) || Date.now(), by: s.by === 'parent' ? 'parent' : 'kid', ...(s.ticket ? { ticket: String(s.ticket) } : {}) })));
+      itemId: String(s.itemId), name: String(s.name), emoji: String(s.emoji), price: num(s.price), t: Number(s.t) || Date.now(), by: s.by === 'parent' ? 'parent' : 'kid', ...(s.ticket ? { ticket: String(s.ticket) } : {}), pay: s.pay === 'transfer' ? 'transfer' : 'cash', ok: !!s.ok })));
     (d.closings || []).forEach(c => ops.push(b => b.set(doc(closingsCol()), c)));
     ops.push(b => b.set(turnDoc(), { start: Number(t.start) || Date.now(), base: num(t.base) }));
   }
@@ -665,12 +707,18 @@ app.addEventListener('click', e => {
   if (t.dataset.sell) { pick(t.dataset.sell, t); return; }
   if (t.dataset.unpick) { unpick(+t.dataset.unpick); return; }
   if (t.id === 'clearcart') { cart = []; saveCart(); renderKid(); return; }
-  if (t.id === 'pay') { pay(); return; }
+  if (t.id === 'pay') { askPay(); return; }
   if (role !== 'parent') return; // de aquí en adelante, solo papás
   if (t.id === 'toparent') { mode = 'parent'; render(); scrollTo(0, 0); return; }
   if (t.id === 'tokid') { mode = 'kid'; editing = null; confirmKey = null; render(); scrollTo(0, 0); return; }
   if (t.dataset.tab) { tab = t.dataset.tab; editing = null; confirmKey = null; render(); scrollTo(0, 0); return; }
   if (t.hasAttribute('data-cancel')) { confirmKey = null; render(); return; }
+  if (t.dataset.okticket) {
+    const g = tickets(S.sales).find(x => x.id === t.dataset.okticket); if (!g) return;
+    const v = !g.sales.every(s => s.ok), b = writeBatch(db);
+    g.sales.forEach(s => b.update(doc(db, 'sales', s.id), { ok: v }));
+    commit(b, v ? 'Transferencia confirmada' : 'Marcada como no confirmada'); return;
+  }
   if (t.dataset.delticket) {
     const g = tickets(S.sales).find(x => x.id === t.dataset.delticket); if (!g) return;
     const b = writeBatch(db), counts = new Map();
@@ -681,10 +729,11 @@ app.addEventListener('click', e => {
   if (t.dataset.den) { const d = +t.dataset.den; den[d] = Math.max(0, (den[d] || 0) + +t.dataset.dir); counted = String(denTotal()); render(); return; }
   if (t.id === 'close') { confirmKey = 'close'; render(); return; }
   if (t.id === 'doclose') {
-    const sales = total(S.sales), base = turn().base || 0;
+    const sales = total(S.sales), base = turn().base || 0, cash = cashTotal(S.sales), tr = transferTotal(S.sales);
+    const pendV = pendingTransfers(S.sales).reduce((a, g) => a + total(g.sales), 0);
     const b = writeBatch(db);
     const su = invSummary(invRows());
-    b.set(doc(closingsCol()), { start: turn().start, end: Date.now(), base, sales, expected: base + sales, counted: countedValue() || 0, count: S.sales.length, items: byItem(S.sales), note,
+    b.set(doc(closingsCol()), { start: turn().start, end: Date.now(), base, sales, expected: base + cash, cashSales: cash, transferSales: tr, transferPending: pendV, counted: countedValue() || 0, count: S.sales.length, items: byItem(S.sales), note,
       ...(su.counted ? { inventory: su.rows, missUnits: su.missUnits, missValue: su.missValue } : {}) });
     // El inventario de la app queda igual a lo contado.
     su.rows.forEach(r => { if (r.missing !== 0) b.update(doc(db, 'items', r.itemId), { stock: r.counted }); });
