@@ -146,7 +146,7 @@ function activate(r) {
   role = r; user = sessions[r]; db = dbFor(r); fatal = '';
   mode = r === 'parent' ? 'parent' : 'kid'; tab = 'hoy'; editing = null; confirmKey = null;
   counted = ''; den = {}; note = '';
-  lsSet(LAST_KEY, r); screen = 'app';
+  lsSet(LAST_KEY, r); screen = 'app'; loadCart();
   listen(); render(); scrollTo(0, 0);
 }
 function deactivate() {
@@ -324,52 +324,86 @@ app.addEventListener('submit', async e => {
 });
 
 // ---------- MODO MACARENA ----------
-function soldCount(id) { return S.sales.filter(s => s.itemId === id).length; }
-function myLastSale() { for (let i = S.sales.length - 1; i >= 0; i--) if (S.sales[i].by === role) return S.sales[i]; return null; }
+// Cada cliente es una "venta": Macarena toca los dulces, ve el total de esa venta y toca "Cobrar".
+let cart = [];
+const CART_KEY = () => 'tiendaMacarena.cesta.' + role;
+function loadCart() { try { cart = JSON.parse(lsGet(CART_KEY()) || '[]'); } catch (e) { cart = []; } }
+function saveCart() { lsSet(CART_KEY(), cart.length ? JSON.stringify(cart) : null); }
+const inCart = id => cart.filter(x => x === id).length;
+const cartItems = () => cart.map(itemById).filter(Boolean);
+const cartTotal = () => cartItems().reduce((a, i) => a + i.price, 0);
+// Agrupa las ventas del turno por cliente (ticket). Las ventas viejas sin ticket cuentan solas.
+function tickets(sales) {
+  const m = new Map();
+  sales.forEach(s => { const k = s.ticket || s.id; const g = m.get(k) || { id: k, t: s.t, by: s.by, sales: [] }; g.sales.push(s); m.set(k, g); });
+  return [...m.values()].sort((a, b) => a.t - b.t);
+}
 function renderKid() {
   const items = S.items.filter(i => i.active);
-  const sum = total(S.sales);
-  const last = myLastSale();
+  const nT = tickets(S.sales).length;
+  const ci = cartItems();
   app.innerHTML = `
   <div class="kidtop">
     <h1 id="kidtitle">La tienda de Macarena</h1>
     <div class="row" style="flex-wrap:nowrap">${role === 'parent' ? '<button class="btn ghost" id="toparent">Modo papás</button>' : ''}<button class="lockbtn" id="home" aria-label="Inicio: cambiar de usuario">🏠</button></div>
   </div>
-  <div class="grid">${items.map(i => {
-    const c = soldCount(i.id), out = i.stock <= 0, low = !out && i.stock <= 3;
-    return `<button class="candy${out ? ' out' : ''}" data-sell="${i.id}" style="--c:${esc(i.color)}" aria-label="Vender ${esc(i.name)} a ${fmt(i.price)}">
+  <div class="today"><span>☀️ Hoy vendiste</span><b class="num">${fmt(total(S.sales))}</b><small>${nT} ${nT === 1 ? 'venta' : 'ventas'}</small></div>
+  <div class="grid kidgrid">${items.map(i => {
+    const c = inCart(i.id), left = i.stock - c, out = left <= 0, low = !out && left <= 3;
+    return `<button class="candy${out ? ' out' : ''}${c ? ' picked' : ''}" data-sell="${i.id}" style="--c:${esc(i.color)}" aria-label="Agregar ${esc(i.name)} de ${fmt(i.price)}">
       ${c ? `<span class="cnt num">${c}</span>` : ''}
-      ${out ? '<span class="low">Se acabó</span>' : low ? `<span class="low">Quedan ${i.stock}</span>` : ''}
+      ${out ? `<span class="low">${i.stock <= 0 ? 'Se acabó' : 'No hay más'}</span>` : low ? `<span class="low">Quedan ${left}</span>` : ''}
       <span class="em">${esc(i.emoji)}</span><span class="nm">${esc(i.name)}</span><span class="pr num">${fmt(i.price)}</span></button>`; }).join('')}
     ${items.length ? '' : '<p class="muted">No hay dulces todavía. Los papás los agregan desde su celular.</p>'}
   </div>
-  <div class="bar"><div class="bar-in">
-    <div class="money"><small>Plata de hoy · ${S.sales.length} dulces</small><b class="num">${fmt(sum)}</b></div>
-    <button class="undo" id="undo" ${last ? '' : 'disabled'}>↩️ Deshacer</button>
+  <div class="bar cart"><div class="bar-in">
+    ${ci.length ? `
+      <div class="cart-head"><b>🛒 Venta ${nT + 1}</b><span class="muted">Toca un dulce de aquí para quitarlo</span></div>
+      <div class="chips">${ci.map((i, n) => `<button class="chip" data-unpick="${n}" style="--c:${esc(i.color)}" aria-label="Quitar ${esc(i.name)}">${esc(i.emoji)}<small>✕</small></button>`).join('')}</div>
+      <div class="cart-foot">
+        <button class="clearcart" id="clearcart" aria-label="Borrar esta venta">🗑️</button>
+        <div class="money"><small>Total</small><b class="num">${fmt(cartTotal())}</b></div>
+        <button class="pay" id="pay">✅ Cobrar</button>
+      </div>`
+    : `<div class="cart-empty">🛒 <span>Toca los dulces que te compran</span></div>`}
   </div></div>`;
 }
-function sell(id, el) {
+function pick(id, el) {
   const it = itemById(id); if (!it) return;
-  if (it.stock <= 0) { toast(`No quedan ${it.name}`); return; }
+  if (it.stock - inCart(id) <= 0) { toast(`No quedan más ${it.name}`); return; }
   const r = el.getBoundingClientRect();
-  const b = writeBatch(db);
-  b.set(doc(salesCol()), { itemId: it.id, name: it.name, emoji: it.emoji, price: it.price, t: Date.now(), by: role });
-  b.update(doc(db, 'items', it.id), { stock: increment(-1) });
-  commit(b);
-  ding();
+  cart.push(id); saveCart(); ding(); renderKid();
   const f = document.createElement('div'); f.className = 'fly'; f.textContent = '+' + fmt(it.price);
   f.style.left = (r.left + r.width / 2 - 50) + 'px'; f.style.top = (r.top + 10) + 'px'; document.body.appendChild(f); setTimeout(() => f.remove(), 900);
-  setTimeout(() => { const nb = app.querySelector(`[data-sell="${id}"]`); if (nb) nb.classList.add('pop'); }, 0);
-  toast(`¡Vendiste ${it.emoji} ${it.name}!`);
+  const nb = app.querySelector(`[data-sell="${id}"]`); if (nb) nb.classList.add('pop');
 }
-function undo() {
-  const s = myLastSale(); if (!s) return;
+function unpick(n) { cart.splice(n, 1); saveCart(); renderKid(); }
+function pay() {
+  const ci = cartItems(); if (!ci.length) { cart = []; saveCart(); renderKid(); return; }
+  const sum = cartTotal(), ticket = uid(), t = Date.now(), counts = new Map();
   const b = writeBatch(db);
-  b.delete(doc(db, 'sales', s.id));
-  if (itemById(s.itemId)) b.update(doc(db, 'items', s.itemId), { stock: increment(1) });
-  commit(b); toast(`Se quitó ${s.emoji} ${s.name}`);
+  ci.forEach(it => {
+    b.set(doc(salesCol()), { itemId: it.id, name: it.name, emoji: it.emoji, price: it.price, t, by: role, ticket });
+    counts.set(it.id, (counts.get(it.id) || 0) + 1);
+  });
+  counts.forEach((n, id) => b.update(doc(db, 'items', id), { stock: increment(-n) }));
+  commit(b);
+  cart = []; saveCart(); cashSound(); renderKid();
+  const o = document.createElement('div'); o.className = 'overlay party';
+  o.innerHTML = `<div class="partybox"><div class="big">🎉</div><h2>¡Venta lista!</h2><b class="num">${fmt(sum)}</b><span>${ci.map(i => esc(i.emoji)).join(' ')}</span></div>`;
+  o.addEventListener('click', () => o.remove()); document.body.appendChild(o); setTimeout(() => o.remove(), 1800);
 }
-
+function cashSound() {
+  if (!sound) return;
+  try {
+    ac = ac || new (window.AudioContext || window.webkitAudioContext)();
+    [[1047, 0], [1319, .12], [1568, .24]].forEach(([f, d]) => {
+      const o = ac.createOscillator(), g = ac.createGain(); o.type = 'triangle'; o.frequency.value = f;
+      g.gain.setValueAtTime(.16, ac.currentTime + d); g.gain.exponentialRampToValueAtTime(.001, ac.currentTime + d + .3);
+      o.connect(g); g.connect(ac.destination); o.start(ac.currentTime + d); o.stop(ac.currentTime + d + .32);
+    });
+  } catch (e) {}
+}
 
 // ---------- MODO PAPÁS ----------
 function byItem(sales) {
@@ -389,12 +423,12 @@ function renderParent() {
 }
 
 function pHoy() {
-  const sales = S.sales, sum = total(sales), rows = byItem(sales);
+  const sales = S.sales, sum = total(sales), rows = byItem(sales), tk = tickets(sales);
   return `
   <div class="card">
     <div class="lbl">Turno abierto desde ${esc(dt(turn().start))}</div>
     <div class="kpis"><div class="kpi"><span class="lbl">Vendido</span><b class="num">${fmt(sum)}</b></div>
-    <div class="kpi"><span class="lbl">Dulces</span><b class="num">${sales.length}</b></div></div>
+    <div class="kpi"><span class="lbl">Ventas · dulces</span><b class="num">${tk.length} · ${sales.length}</b></div></div>
     <button class="btn big" data-tab="cierre">Cerrar caja</button>
   </div>
   <div class="card"><h2>Por dulce</h2>
@@ -403,12 +437,11 @@ function pHoy() {
     </tbody></table></div>` : '<p class="muted">Todavía no hay ventas en este turno.</p>'}
   </div>
   <div class="card"><h2>Cada venta</h2>
-    <p class="muted" style="margin:0">Si Macarena tocó un dulce por error, bórralo aquí. El dulce vuelve al inventario.</p>
-    ${sales.length ? sales.slice().reverse().map(s => `<div class="sale"><span>${esc(s.emoji)} ${esc(s.name)} <span class="muted num">· ${hr(s.t)}${s.by === 'parent' ? ' · papás' : ''}</span></span>
-      <span class="row" style="gap:4px"><b class="num">${fmt(s.price)}</b><button data-delsale="${s.id}">Borrar</button></span></div>`).join('') : '<p class="muted">Sin ventas.</p>'}
+    <p class="muted" style="margin:0">Si una venta quedó mal, bórrala aquí. Los dulces vuelven al inventario.</p>
+    ${tk.length ? tk.map((g, n) => ({ g, n: n + 1 })).reverse().map(({ g, n }) => `<div class="sale"><span><b>Venta ${n}</b> <span class="muted num">· ${hr(g.t)}${g.by === 'parent' ? ' · papás' : ''}</span><br>${g.sales.map(s => esc(s.emoji)).join(' ')}</span>
+      <span class="row" style="gap:4px;flex-wrap:nowrap"><b class="num">${fmt(total(g.sales))}</b><button data-delticket="${esc(g.id)}">Borrar</button></span></div>`).join('') : '<p class="muted">Sin ventas.</p>'}
   </div>`;
 }
-
 function pCierre() {
   const sales = total(S.sales), base = turn().base || 0, expected = base + sales, c = countedValue();
   let cls = 'none', title = 'Escribe cuánta plata hay', sub = '';
@@ -509,7 +542,7 @@ function backupJSON() {
   const strip = ({ id, ...rest }) => ({ id, ...rest });
   return JSON.stringify({
     items: S.items.map(strip),
-    turn: { start: turn().start, base: turn().base || 0, sales: S.sales.map(s => ({ id: s.id, itemId: s.itemId, name: s.name, emoji: s.emoji, price: s.price, t: s.t, by: s.by })) },
+    turn: { start: turn().start, base: turn().base || 0, sales: S.sales.map(s => ({ id: s.id, itemId: s.itemId, name: s.name, emoji: s.emoji, price: s.price, t: s.t, by: s.by, ticket: s.ticket || null })) },
     closings: S.closings.map(({ id, ...c }) => c)
   });
 }
@@ -554,7 +587,7 @@ async function replaceAll(d, seed) {
       stock: Math.round(Number(i.stock) || 0), active: i.active !== false, example: !!i.example, order: typeof i.order === 'number' ? i.order : n })));
     const t = d.turn || {};
     (t.sales || []).forEach(s => ops.push(b => b.set(doc(db, 'sales', String(s.id || uid())), {
-      itemId: String(s.itemId), name: String(s.name), emoji: String(s.emoji), price: num(s.price), t: Number(s.t) || Date.now(), by: s.by === 'parent' ? 'parent' : 'kid' })));
+      itemId: String(s.itemId), name: String(s.name), emoji: String(s.emoji), price: num(s.price), t: Number(s.t) || Date.now(), by: s.by === 'parent' ? 'parent' : 'kid', ...(s.ticket ? { ticket: String(s.ticket) } : {}) })));
     (d.closings || []).forEach(c => ops.push(b => b.set(doc(closingsCol()), c)));
     ops.push(b => b.set(turnDoc(), { start: Number(t.start) || Date.now(), base: num(t.base) }));
   }
@@ -601,17 +634,20 @@ app.addEventListener('click', e => {
   if (t.id === 'lockno') { activate(pendingRole); return; }
   if (t.id === 'lockoff') { lsSet(LOCK_KEY + 'parent', null); render(); toast('Desactivado'); return; }
   if (t.id === 'reload') { location.reload(); return; }
-  if (t.dataset.sell) { sell(t.dataset.sell, t); return; }
-  if (t.id === 'undo') { undo(); return; }
+  if (t.dataset.sell) { pick(t.dataset.sell, t); return; }
+  if (t.dataset.unpick) { unpick(+t.dataset.unpick); return; }
+  if (t.id === 'clearcart') { cart = []; saveCart(); renderKid(); return; }
+  if (t.id === 'pay') { pay(); return; }
   if (role !== 'parent') return; // de aquí en adelante, solo papás
   if (t.id === 'toparent') { mode = 'parent'; render(); scrollTo(0, 0); return; }
   if (t.id === 'tokid') { mode = 'kid'; editing = null; confirmKey = null; render(); scrollTo(0, 0); return; }
   if (t.dataset.tab) { tab = t.dataset.tab; editing = null; confirmKey = null; render(); scrollTo(0, 0); return; }
   if (t.hasAttribute('data-cancel')) { confirmKey = null; render(); return; }
-  if (t.dataset.delsale) {
-    const s = S.sales.find(x => x.id === t.dataset.delsale); if (!s) return;
-    const b = writeBatch(db); b.delete(doc(db, 'sales', s.id));
-    if (itemById(s.itemId)) b.update(doc(db, 'items', s.itemId), { stock: increment(1) });
+  if (t.dataset.delticket) {
+    const g = tickets(S.sales).find(x => x.id === t.dataset.delticket); if (!g) return;
+    const b = writeBatch(db), counts = new Map();
+    g.sales.forEach(s => { b.delete(doc(db, 'sales', s.id)); if (itemById(s.itemId)) counts.set(s.itemId, (counts.get(s.itemId) || 0) + 1); });
+    counts.forEach((n, id) => b.update(doc(db, 'items', id), { stock: increment(n) }));
     commit(b, 'Venta borrada'); return;
   }
   if (t.dataset.den) { const d = +t.dataset.den; den[d] = Math.max(0, (den[d] || 0) + +t.dataset.dir); counted = String(denTotal()); render(); return; }

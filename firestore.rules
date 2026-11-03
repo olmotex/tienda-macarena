@@ -8,21 +8,21 @@ service cloud.firestore {
     function isFamily() { return isParent() || isKid(); }
     function item(id) { return get(/databases/$(database)/documents/items/$(id)).data; }
 
-    // Dulces: los papás hacen todo. Macarena solo puede bajar o subir el inventario de a 1 (vender / deshacer).
+    // Dulces: los papás hacen todo. Macarena solo puede bajar el inventario al cobrar (o subirlo de a 1).
     match /items/{id} {
       allow read: if isFamily();
       allow create, delete: if isParent();
       allow update: if isParent() || (isKid()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock'])
-        && (request.resource.data.stock == resource.data.stock - 1
+        && (request.resource.data.stock < resource.data.stock
             || request.resource.data.stock == resource.data.stock + 1));
     }
 
-    // Ventas del turno abierto: Macarena registra ventas al precio real y puede deshacer las suyas.
+    // Ventas del turno abierto: Macarena registra ventas al precio real (agrupadas por cliente en 'ticket').
     match /sales/{id} {
       allow read: if isFamily();
       allow create: if isParent() || (isKid()
-        && request.resource.data.keys().hasOnly(['itemId', 'name', 'emoji', 'price', 't', 'by'])
+        && request.resource.data.keys().hasOnly(['itemId', 'name', 'emoji', 'price', 't', 'by', 'ticket'])
         && request.resource.data.by == 'kid'
         && exists(/databases/$(database)/documents/items/$(request.resource.data.itemId))
         && request.resource.data.price == item(request.resource.data.itemId).price);
