@@ -15,6 +15,10 @@ Los datos se guardan en Firebase (proyecto `tienda-macarena`) y se ven en los do
 - `vendor/firebase.js`: librería de Firebase 10.14.1 empaquetada.
 - `sw.js`, `manifest.webmanifest`, `icons/`: para que se instale como app. Al cambiar la app, sube la versión en `sw.js` (`tienda-v1` → `tienda-v2`).
 
-## Cerrar sesión en el celular de Macarena
+## Inicio, cambiar de usuario y Face ID
 
-Mantener presionado el título "La tienda de Macarena" 3 segundos.
+- El botón 🏠 lleva a la pantalla de inicio, donde se elige "Soy Macarena" o "Somos los papás".
+- Cada usuario escribe su contraseña una sola vez por celular y la sesión queda guardada.
+- Después de la contraseña, la app ofrece activar Face ID, huella o la clave del celular. Si está activado, se entra desde el inicio con eso. Si los papás no lo activan, al ir al inicio se cierra su sesión y la próxima vez se pide la contraseña, para que Macarena no pueda entrar a su modo.
+- Si la app queda en segundo plano más de 2 minutos, vuelve a pedir Face ID.
+- En el inicio, "Cerrar sesiones guardadas" borra las sesiones de ese celular.

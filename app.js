@@ -7,18 +7,25 @@ import {
 } from './vendor/firebase.js';
 import { firebaseConfig, USERS } from './firebase-config.js';
 
-const fbApp = initializeApp(firebaseConfig);
-const auth = getAuth(fbApp);
-let db;
-try { db = initializeFirestore(fbApp, { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) }); }
-catch (e) { db = initializeFirestore(fbApp, {}); }
-if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
-  // Pruebas locales con el emulador de Firebase.
-  if (new URLSearchParams(location.search).has('emu')) {
-    connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
-    connectFirestoreEmulator(db, '127.0.0.1', 8080);
+// Una "app" de Firebase por usuario: así las dos sesiones quedan guardadas en el celular
+// y se puede cambiar de usuario desde la pantalla de inicio sin escribir la contraseña otra vez.
+const EMU = (location.hostname === 'localhost' || location.hostname === '127.0.0.1') && new URLSearchParams(location.search).has('emu');
+const ROLES = ['kid', 'parent'];
+const apps = {}, auths = {}, dbs = {};
+ROLES.forEach(r => {
+  apps[r] = initializeApp(firebaseConfig, 'tienda-' + r);
+  auths[r] = getAuth(apps[r]);
+  if (EMU) connectAuthEmulator(auths[r], 'http://127.0.0.1:9099', { disableWarnings: true });
+});
+function dbFor(r) {
+  if (!dbs[r]) {
+    try { dbs[r] = initializeFirestore(apps[r], { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) }); }
+    catch (e) { dbs[r] = initializeFirestore(apps[r], {}); }
+    if (EMU) connectFirestoreEmulator(dbs[r], '127.0.0.1', 8080);
   }
+  return dbs[r];
 }
+let db = null;
 
 const OLD_KEY = 'tiendaMacarena.v1';
 const SOUND_KEY = 'tiendaMacarena.sound';
@@ -105,13 +112,101 @@ function roleOf(u) {
   return null;
 }
 
-onAuthStateChanged(auth, u => {
+// screen: 'boot' | 'home' | 'login' | 'offer' | 'unlock' | 'app'
+let screen = 'boot', pendingRole = null;
+const sessions = { kid: null, parent: null }, authReady = { kid: false, parent: false };
+const LAST_KEY = 'tiendaMacarena.last', LOCK_KEY = 'tiendaMacarena.lock.';
+const lsGet = k => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+const lsSet = (k, v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (e) {} };
+
+ROLES.forEach(r => onAuthStateChanged(auths[r], u => {
+  // Solo se acepta la sesión si el correo corresponde a ese usuario.
+  sessions[r] = u && roleOf(u) === r ? u : null;
+  if (u && !sessions[r]) signOut(auths[r]);
+  const first = !authReady[r]; authReady[r] = true;
+  if (!u && role === r) deactivate();
+  if (first && authReady.kid && authReady.parent) boot();
+  else if (screen !== 'app') render();
+}));
+
+function boot() {
+  const last = lsGet(LAST_KEY);
+  if (last && sessions[last]) {
+    if (lockOf(last)) { pendingRole = last; screen = 'unlock'; render(); }
+    else activate(last);
+  } else { screen = 'home'; render(); }
+}
+
+function stopListening() {
   unsubs.forEach(f => f()); unsubs = [];
   S.items = []; S.sales = []; S.turn = null; S.closings = []; S.loaded = { items: false, sales: false, turn: false };
-  user = u; role = roleOf(u); fatal = '';
-  mode = role === 'parent' ? 'parent' : 'kid'; tab = 'hoy'; editing = null; confirmKey = null;
-  if (u && role) listen();
+}
+function activate(r) {
+  stopListening();
+  role = r; user = sessions[r]; db = dbFor(r); fatal = '';
+  mode = r === 'parent' ? 'parent' : 'kid'; tab = 'hoy'; editing = null; confirmKey = null;
+  counted = ''; den = {}; note = '';
+  lsSet(LAST_KEY, r); screen = 'app';
+  listen(); render(); scrollTo(0, 0);
+}
+function deactivate() {
+  stopListening(); role = null; user = null; db = null; screen = 'home'; render(); scrollTo(0, 0);
+}
+// Ir a la pantalla de inicio. Si los papás no tienen desbloqueo, se cierra su sesión
+// para que Macarena no pueda entrar a su modo sin la contraseña.
+function goHome() {
+  if (role === 'parent' && !lockOf('parent')) { const a = auths.parent; deactivate(); signOut(a); return; }
+  deactivate();
+}
+async function logoutRole(r) {
+  lsSet(LOCK_KEY + r, null);
+  if (role === r) deactivate();
+  await signOut(auths[r]);
   render();
+}
+
+// ---------- Face ID / huella / bloqueo del celular (WebAuthn) ----------
+// Es un candado local: el celular confirma que eres tú antes de abrir la sesión guardada.
+const lockOf = r => lsGet(LOCK_KEY + r);
+const b64 = buf => btoa(String.fromCharCode(...new Uint8Array(buf)));
+const unb64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+const rand = n => crypto.getRandomValues(new Uint8Array(n));
+async function lockAvailable() {
+  try { return !!(window.PublicKeyCredential && await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()); }
+  catch (e) { return false; }
+}
+async function createLock(r) {
+  const cred = await navigator.credentials.create({ publicKey: {
+    challenge: rand(32),
+    rp: { name: 'Tienda de Macarena' },
+    user: { id: rand(16), name: USERS[r].email, displayName: r === 'kid' ? 'Macarena' : 'Papás' },
+    pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
+    authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'discouraged' },
+    timeout: 60000, attestation: 'none'
+  } });
+  lsSet(LOCK_KEY + r, b64(cred.rawId));
+}
+async function checkLock(r) {
+  const id = lockOf(r); if (!id) return true;
+  try {
+    await navigator.credentials.get({ publicKey: {
+      challenge: rand(32), allowCredentials: [{ type: 'public-key', id: unb64(id), transports: ['internal'] }],
+      userVerification: 'required', timeout: 60000
+    } });
+    return true;
+  } catch (e) { console.warn(e); return false; }
+}
+async function enter(r) {
+  if (!sessions[r]) { loginWho = r; loginErr = ''; screen = 'login'; render(); return; }
+  if (lockOf(r) && !(await checkLock(r))) { toast('No se pudo confirmar. Intenta de nuevo.'); return; }
+  if (role === r && screen === 'unlock') { screen = 'app'; render(); return; }
+  activate(r);
+}
+// Volver a pedir Face ID si la app estuvo en segundo plano más de 2 minutos.
+let hiddenAt = 0;
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { hiddenAt = Date.now(); return; }
+  if (screen === 'app' && role && lockOf(role) && Date.now() - hiddenAt > 120000) { pendingRole = role; screen = 'unlock'; render(); }
 });
 
 function onErr(err) {
@@ -156,47 +251,76 @@ async function initStore() {
 const turn = () => S.turn || { start: Date.now(), base: 0 };
 const ready = () => S.loaded.items && S.loaded.sales && S.loaded.turn;
 
-// ---------- LOGIN ----------
+// ---------- INICIO / LOGIN ----------
+const WHO = { kid: { icon: '👧', name: 'Soy Macarena', sub: 'Para vender en la tienda' }, parent: { icon: '👪', name: 'Somos los papás', sub: 'Dulces, precios, cierres e historial' } };
+function renderHome() {
+  app.innerHTML = `
+  <div class="login">
+    <div class="logo">🍭</div>
+    <h1>La tienda de Macarena</h1>
+    <p class="muted">¿Quién va a usar la tienda?</p>
+    ${ROLES.map(r => { const w = WHO[r], saved = !!sessions[r], lk = !!lockOf(r);
+      return `<button class="who" data-who="${r}"><span>${w.icon}</span><b>${w.name}</b>
+        <small>${saved ? (lk ? '🔓 Entrar con Face ID o huella' : '✓ Sesión guardada · Entrar') : w.sub}</small></button>`; }).join('')}
+    ${ROLES.some(r => sessions[r]) ? `<details class="more"><summary class="muted">Cerrar sesiones guardadas</summary>
+      ${ROLES.filter(r => sessions[r]).map(r => `<button class="btn ghost" data-logout="${r}">Cerrar sesión de ${r === 'kid' ? 'Macarena' : 'los papás'}</button>`).join('')}
+    </details>` : ''}
+  </div>`;
+}
 function renderLogin() {
-  if (!loginWho) {
-    app.innerHTML = `
-    <div class="login">
-      <div class="logo">🍭</div>
-      <h1>La tienda de Macarena</h1>
-      <p class="muted">¿Quién va a usar este celular?</p>
-      <button class="who" data-who="kid"><span>👧</span><b>Soy Macarena</b><small>Para vender en la tienda</small></button>
-      <button class="who" data-who="parent"><span>👪</span><b>Somos los papás</b><small>Dulces, precios, cierres e historial</small></button>
-    </div>`;
-    return;
-  }
   const w = USERS[loginWho];
   app.innerHTML = `
   <form class="login" id="loginform">
-    <div class="logo">${loginWho === 'kid' ? '👧' : '👪'}</div>
-    <h1>${loginWho === 'kid' ? 'Celular de Macarena' : 'Celular de los papás'}</h1>
-    <p class="muted">Escribe la contraseña de <b>${esc(w.email)}</b>. Solo se pide una vez en este celular.</p>
+    <div class="logo">${WHO[loginWho].icon}</div>
+    <h1>${loginWho === 'kid' ? 'Entrar como Macarena' : 'Entrar como papás'}</h1>
+    <p class="muted">Escribe la contraseña de <b>${esc(w.email)}</b>. Queda guardada en este celular.</p>
     <div class="field"><label class="lbl" for="pw">Contraseña</label>
       <input id="pw" type="password" autocomplete="current-password" required></div>
     ${loginErr ? `<p class="err">${esc(loginErr)}</p>` : ''}
     <button class="btn big" type="submit" ${loginBusy ? 'disabled' : ''}>${loginBusy ? 'Entrando…' : 'Entrar'}</button>
-    <button class="btn ghost big" type="button" id="backwho">Volver</button>
+    <button class="btn ghost big" type="button" id="backhome">Volver al inicio</button>
   </form>`;
   setTimeout(() => document.getElementById('pw')?.focus(), 50);
+}
+function renderOffer() {
+  app.innerHTML = `
+  <div class="login">
+    <div class="logo">🔐</div>
+    <h1>¿Entrar con Face ID o huella?</h1>
+    <p class="muted">La próxima vez que elijas ${pendingRole === 'kid' ? '<b>Macarena</b>' : '<b>los papás</b>'} en el inicio, el celular te pedirá Face ID, la huella o su clave de bloqueo en vez de la contraseña.</p>
+    ${pendingRole === 'parent' ? '<p class="muted">Recomendado: así Macarena no puede entrar al modo papás desde el inicio.</p>' : ''}
+    <button class="btn big" id="lockyes">Sí, activar</button>
+    <button class="btn ghost big" id="lockno">Ahora no</button>
+  </div>`;
+}
+function renderUnlock() {
+  app.innerHTML = `
+  <div class="login">
+    <div class="logo">🔒</div>
+    <h1>${pendingRole === 'kid' ? 'Tienda de Macarena' : 'Modo papás'}</h1>
+    <p class="muted">Desbloquea con Face ID, la huella o la clave del celular.</p>
+    <button class="btn big" id="unlock">Desbloquear</button>
+    <button class="btn ghost big" id="unlockhome">Ir al inicio</button>
+  </div>`;
 }
 app.addEventListener('submit', async e => {
   if (e.target.id !== 'loginform') return;
   e.preventDefault();
-  const pw = document.getElementById('pw').value;
+  const r = loginWho, pw = document.getElementById('pw').value;
   loginBusy = true; loginErr = ''; renderLogin();
-  try { await signInWithEmailAndPassword(auth, USERS[loginWho].email, pw); loginWho = null; }
-  catch (err) {
+  try {
+    const cred = await signInWithEmailAndPassword(auths[r], USERS[r].email, pw);
+    sessions[r] = cred.user; loginBusy = false; loginWho = null;
+    if (!lockOf(r) && await lockAvailable()) { pendingRole = r; screen = 'offer'; render(); }
+    else activate(r);
+    return;
+  } catch (err) {
     const c = err && err.code || '';
     loginErr = c.includes('network') ? 'No hay internet. Conéctate e intenta de nuevo.'
       : c.includes('too-many') ? 'Demasiados intentos. Espera un rato e intenta de nuevo.'
       : 'Contraseña incorrecta.';
   }
-  loginBusy = false;
-  if (!user) renderLogin();
+  loginBusy = false; renderLogin();
 });
 
 // ---------- MODO MACARENA ----------
@@ -209,7 +333,7 @@ function renderKid() {
   app.innerHTML = `
   <div class="kidtop">
     <h1 id="kidtitle">La tienda de Macarena</h1>
-    ${role === 'parent' ? '<button class="btn ghost" id="toparent">Modo papás</button>' : ''}
+    <div class="row" style="flex-wrap:nowrap">${role === 'parent' ? '<button class="btn ghost" id="toparent">Modo papás</button>' : ''}<button class="lockbtn" id="home" aria-label="Inicio: cambiar de usuario">🏠</button></div>
   </div>
   <div class="grid">${items.map(i => {
     const c = soldCount(i.id), out = i.stock <= 0, low = !out && i.stock <= 3;
@@ -246,20 +370,6 @@ function undo() {
   commit(b); toast(`Se quitó ${s.emoji} ${s.name}`);
 }
 
-// Cerrar sesión en el celular de Macarena: mantener presionado el título 3 segundos.
-let pressT;
-app.addEventListener('pointerdown', e => {
-  if (e.target.id !== 'kidtitle' || role !== 'kid') return;
-  pressT = setTimeout(() => {
-    confirmKey = 'logout';
-    const o = document.createElement('div'); o.className = 'overlay';
-    o.innerHTML = `<div class="pinbox" role="dialog"><h2>¿Cerrar sesión?</h2><p class="muted">Para volver a entrar se necesita la contraseña de Macarena.</p>
-      <button class="btn big" data-lo="yes">Sí, cerrar sesión</button><button class="btn ghost big" data-lo="no">No</button></div>`;
-    o.addEventListener('click', ev => { const k = ev.target.closest('[data-lo]')?.dataset.lo; if (k === 'yes') signOut(auth); if (k) o.remove(); });
-    document.body.appendChild(o);
-  }, 3000);
-});
-['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => app.addEventListener(ev, () => clearTimeout(pressT)));
 
 // ---------- MODO PAPÁS ----------
 function byItem(sales) {
@@ -273,7 +383,7 @@ function denTotal() { return DENOMS.reduce((a, d) => a + d * (den[d] || 0), 0); 
 function renderParent() {
   const tabs = [['hoy','Ventas de hoy'],['cierre','Cerrar caja'],['dulces','Dulces'],['historial','Historial'],['ajustes','Ajustes']];
   app.innerHTML = `
-  <div class="ptop"><h1>Modo papás</h1><button class="btn" id="tokid">Ver la tienda</button></div>
+  <div class="ptop"><h1>Modo papás</h1><div class="row" style="flex-wrap:nowrap"><button class="btn" id="tokid">Ver la tienda</button><button class="lockbtn" id="home" aria-label="Inicio: cambiar de usuario">🏠</button></div></div>
   <div class="tabs" role="tablist">${tabs.map(([k, l]) => `<button role="tab" aria-selected="${tab === k}" data-tab="${k}">${l}</button>`).join('')}</div>
   <div class="panel">${({ hoy: pHoy, cierre: pCierre, dulces: pDulces, historial: pHist, ajustes: pAjustes })[tab]()}</div>`;
 }
@@ -420,9 +530,15 @@ function pAjustes() {
   <div class="card"><h2>Empezar de cero</h2>
     ${confirmKey === 'reset' ? `<div class="confirm">Se borra todo: dulces, ventas e historial, en los dos celulares. <button class="btn danger" id="resetyes">Sí, borrar todo</button><button class="btn ghost" data-cancel>No</button></div>` : '<button class="btn danger" id="reset">Borrar todos los datos</button>'}
   </div>
+  <div class="card"><h2>Face ID o huella</h2>
+    ${lockOf('parent') ? `<p class="muted" style="margin:0">Activado: para entrar al modo papás desde el inicio, el celular pide Face ID, huella o su clave.</p>
+      <button class="btn ghost" id="lockoff">Desactivar</button>`
+    : `<p class="muted" style="margin:0">Desactivado: cada vez que vayas al inicio tendrás que escribir la contraseña de nuevo.</p>
+      <button class="btn" id="lockon">Activar Face ID o huella</button>`}
+  </div>
   <div class="card"><h2>Sesión</h2>
     <p class="muted" style="margin:0">Entraste como <b>${esc(user?.email || '')}</b>.</p>
-    <button class="btn ghost" id="logout">Cerrar sesión en este celular</button>
+    <div class="row"><button class="btn ghost" id="home2">Cambiar de usuario</button><button class="btn danger" data-logout="parent">Cerrar sesión</button></div>
   </div>`;
 }
 
@@ -446,16 +562,15 @@ async function replaceAll(d, seed) {
 }
 
 function render() {
-  if (!user) { renderLogin(); return; }
-  if (!role) {
-    app.innerHTML = `<div class="login"><div class="logo">🔒</div><h1>Usuario no reconocido</h1>
-      <p class="muted">${esc(user.email || '')} no es el usuario de Macarena ni el de los papás.</p>
-      <button class="btn big" id="logout">Cerrar sesión</button></div>`;
-    return;
-  }
+  if (screen === 'boot') { app.innerHTML = '<div class="login"><div class="logo">🍭</div><p class="muted">Cargando…</p></div>'; return; }
+  if (screen === 'home') { renderHome(); return; }
+  if (screen === 'login') { renderLogin(); return; }
+  if (screen === 'offer') { renderOffer(); return; }
+  if (screen === 'unlock') { renderUnlock(); return; }
+  if (!user || !role) { screen = 'home'; renderHome(); return; }
   if (fatal) {
     app.innerHTML = `<div class="login"><div class="logo">⚠️</div><h1>Algo salió mal</h1><p class="muted">${esc(fatal)}</p>
-      <button class="btn big" id="reload">Intentar de nuevo</button><button class="btn ghost big" id="logout">Cerrar sesión</button></div>`;
+      <button class="btn big" id="reload">Intentar de nuevo</button><button class="btn ghost big" id="home">Ir al inicio</button></div>`;
     return;
   }
   if (!ready()) { app.innerHTML = '<div class="login"><div class="logo">🍭</div><p class="muted">Cargando la tienda…</p></div>'; return; }
@@ -464,7 +579,7 @@ function render() {
 
 // Volver a dibujar cuando llegan datos nuevos, sin perder lo que se está escribiendo.
 function refresh() {
-  if (!user || !role) return;
+  if (!user || !role || screen !== 'app') return;
   readForm();
   const a = document.activeElement, id = a && a.id, pos = a && a.selectionStart;
   render();
@@ -475,9 +590,16 @@ function refresh() {
 // ---------- eventos ----------
 app.addEventListener('click', e => {
   const t = e.target.closest('button,[data-tab]'); if (!t) return;
-  if (t.dataset.who) { loginWho = t.dataset.who; loginErr = ''; renderLogin(); return; }
-  if (t.id === 'backwho') { loginWho = null; loginErr = ''; renderLogin(); return; }
-  if (t.id === 'logout') { signOut(auth); return; }
+  if (t.dataset.who) { enter(t.dataset.who); return; }
+  if (t.dataset.logout) { logoutRole(t.dataset.logout); return; }
+  if (t.id === 'backhome' || t.id === 'unlockhome') { loginWho = null; loginErr = ''; if (screen === 'unlock') { stopListening(); role = null; user = null; } screen = 'home'; render(); return; }
+  if (t.id === 'home' || t.id === 'home2') { goHome(); return; }
+  if (t.id === 'unlock') { enter(pendingRole); return; }
+  if (t.id === 'lockyes' || t.id === 'lockon') { const r = t.id === 'lockon' ? 'parent' : pendingRole;
+    createLock(r).then(() => { toast('Listo: Face ID o huella activado'); if (t.id === 'lockyes') activate(r); else render(); },
+      err => { console.warn(err); toast('No se pudo activar. Puedes hacerlo luego.'); if (t.id === 'lockyes') activate(r); }); return; }
+  if (t.id === 'lockno') { activate(pendingRole); return; }
+  if (t.id === 'lockoff') { lsSet(LOCK_KEY + 'parent', null); render(); toast('Desactivado'); return; }
   if (t.id === 'reload') { location.reload(); return; }
   if (t.dataset.sell) { sell(t.dataset.sell, t); return; }
   if (t.id === 'undo') { undo(); return; }
