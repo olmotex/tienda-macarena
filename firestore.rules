@@ -28,7 +28,7 @@ service cloud.firestore {
     match /sales/{id} {
       allow read: if isFamily();
       allow create: if isParent() || (isKid()
-        && request.resource.data.keys().hasOnly(['itemId', 'name', 'emoji', 'price', 't', 'by', 'ticket', 'pay', 'promo'])
+        && request.resource.data.keys().hasOnly(['itemId', 'name', 'emoji', 'price', 't', 'by', 'ticket', 'pay', 'promo', 'rc'])
         && (!('pay' in request.resource.data) || request.resource.data.pay in ['cash', 'transfer', 'credit'])
         && request.resource.data.by == 'kid'
         && exists(/databases/$(database)/documents/items/$(request.resource.data.itemId))
@@ -49,9 +49,21 @@ service cloud.firestore {
         && request.resource.data.total is int && request.resource.data.total >= 0);
       allow update: if isParent() || (isKid()
         && resource.data.paid == false && request.resource.data.paid == true
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['paid', 'paidAt', 'paidWith'])
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['paid', 'paidAt', 'paidWith', 'rc'])
         && request.resource.data.paidWith in ['cash', 'transfer']);
       allow delete: if isParent() || (isKid() && resource.data.by == 'kid' && resource.data.paid == false);
+    }
+
+    // Fotos de comprobantes de transferencia (id = la venta o el fiado). Macarena solo las crea; los papás las ven y borran.
+    // Es una foto JPEG achicada guardada como texto (máximo ~900 KB, Firebase permite 1 MB por documento).
+    match /receipts/{id} {
+      allow read, update, delete: if isParent();
+      allow create: if isParent() || (isKid()
+        && request.resource.data.keys().hasOnly(['img', 't', 'by'])
+        && request.resource.data.by == 'kid'
+        && request.resource.data.img is string
+        && request.resource.data.img.size() < 900000
+        && request.resource.data.img.matches('data:image/jpeg;base64,.*'));
     }
 
     // Turno (sencillo inicial, hora de apertura): Macarena solo lo ve.
