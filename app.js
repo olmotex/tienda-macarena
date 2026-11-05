@@ -562,7 +562,27 @@ function askReceipt(sum, done, back) {
   });
   draw(); document.body.appendChild(o);
 }
-function pay(method, who, receipt, change) {
+// Antes de guardar, Macarena revisa la venta: lo que lleva, el total y cómo pagó.
+// Si algo está mal, toca "Arreglar" y vuelve a la canasta sin que se guarde nada.
+function confirmSale(method, who, receipt, change) {
+  const ci = cartItems(); if (!ci.length) { cart = []; saveCart(); renderKid(); return; }
+  const o = document.createElement('div'); o.className = 'overlay'; o.id = 'confirmsale';
+  const how = method === 'transfer' ? '📱 Transferencia' + (receipt ? ' 🧾' : '') : method === 'credit' ? '📝 Fiado: ' + esc(who) : '💵 Billetes o monedas';
+  o.innerHTML = `<div class="pinbox paybox" role="dialog" aria-label="Revisar la venta"><h2>👀 ¿Está bien?</h2>
+    <div class="cfitems">${ci.map(i => `<span class="chip" style="--c:${esc(i.color)}">${pic(i)}</span>`).join('')}</div>
+    <b class="num paytotal">${fmt(cartTotal())}</b>
+    <span class="cfhow">${how}</span>
+    ${change && change.back > 0 ? `<span class="partyback">Vuelto: <b class="num">${fmt(change.back)}</b></span>` : ''}
+    <button class="paybtn cash" id="cfyes"><span>✅</span>Sí, está bien</button>
+    <button class="paybtn cffix" id="cfno"><span>↩️</span>No, arreglar</button></div>`;
+  o.addEventListener('click', e => {
+    if (e.target.closest('#cfyes')) { o.remove(); pay(method, who, receipt, change, true); return; }
+    if (e.target.closest('#cfno')) { o.remove(); toast('Arregla la venta y vuelve a cobrar'); }
+  });
+  document.body.appendChild(o);
+}
+function pay(method, who, receipt, change, ok) {
+  if (!ok) { confirmSale(method, who, receipt, change); return; }
   const ci = cartItems(); if (!ci.length) { cart = []; saveCart(); renderKid(); return; }
   const sum = cartTotal(), ticket = uid(), t = Date.now(), counts = new Map();
   const b = writeBatch(db);
