@@ -63,6 +63,56 @@ function shrinkPhoto(file) {
     im.src = url;
   });
 }
+// Achica la foto del comprobante (máx. 1280 px, JPEG) para que quepa en Firebase (límite 1 MB por documento).
+// Se baja la calidad hasta que pese menos de ~450 KB; casi siempre queda en 100-250 KB.
+function shrinkReceipt(file) {
+  return new Promise((res, rej) => {
+    const url = URL.createObjectURL(file), im = new Image();
+    im.onload = () => {
+      URL.revokeObjectURL(url);
+      const tries = [[1280, .62], [1100, .55], [950, .5], [800, .45], [700, .4]];
+      let out = '';
+      for (const [max, q] of tries) {
+        const k = Math.min(1, max / Math.max(im.naturalWidth, im.naturalHeight));
+        const c = document.createElement('canvas'); c.width = Math.round(im.naturalWidth * k); c.height = Math.round(im.naturalHeight * k);
+        const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.drawImage(im, 0, 0, c.width, c.height);
+        out = c.toDataURL('image/jpeg', q);
+        if (out.length < 450000) break;
+      }
+      out.startsWith('data:image/jpeg;base64,') && out.length < 900000 ? res(out) : rej(new Error('big'));
+    };
+    im.onerror = () => { URL.revokeObjectURL(url); rej(new Error('img')); };
+    im.src = url;
+  });
+}
+
+// ---------- plata colombiana (para la calculadora de vueltas) ----------
+// Colores aproximados de los billetes y monedas, para que Macarena los reconozca.
+const MONEY = [
+  { v: 100000, bill: true, c: '#a9dba0', label: 'Cien mil' },
+  { v: 50000, bill: true, c: '#e0b0e0', label: 'Cincuenta mil' },
+  { v: 20000, bill: true, c: '#a9c6f0', label: 'Veinte mil' },
+  { v: 10000, bill: true, c: '#f2a49a', label: 'Diez mil' },
+  { v: 5000, bill: true, c: '#d8b48c', label: 'Cinco mil' },
+  { v: 2000, bill: true, c: '#f5c08a', label: 'Dos mil' },
+  { v: 1000, c: '#e9c85b', ring: '#cfd3d8', label: 'Mil' },
+  { v: 500, c: '#cfd3d8', ring: '#e9c85b', label: 'Quinientos' },
+  { v: 200, c: '#d4d7dc', label: 'Doscientos' },
+  { v: 100, c: '#e6c35a', label: 'Cien' },
+  { v: 50, c: '#dcdfe3', label: 'Cincuenta' }
+];
+const short = v => v >= 1000 ? (v / 1000).toLocaleString('es-CO') + ' mil' : String(v);
+function moneyPic(m, small) {
+  return m.bill
+    ? `<span class="bill${small ? ' sm' : ''}" style="--c:${m.c}"><b class="num">${fmt(m.v)}</b></span>`
+    : `<span class="coin${small ? ' sm' : ''}" style="--c:${m.c};--r:${m.ring || 'rgba(0,0,0,.18)'}"><b class="num">${m.v >= 1000 ? short(m.v) : m.v}</b></span>`;
+}
+// El vuelto en billetes y monedas, de los más grandes a los más pequeños.
+function changeParts(amount) {
+  const parts = []; let left = amount;
+  MONEY.forEach(m => { while (left >= m.v) { parts.push(m); left -= m.v; } });
+  return { parts, left };
+}
 const itemById = id => S.items.find(i => i.id === id);
 const total = sales => sales.reduce((a, s) => a + s.price, 0);
 const dt = t => new Date(t).toLocaleString('es-CO', { weekday:'short', day:'numeric', month:'short', hour:'numeric', minute:'2-digit' });
@@ -79,6 +129,7 @@ const salesCol = () => collection(db, 'sales');
 const closingsCol = () => collection(db, 'closings');
 const turnDoc = () => doc(db, 'meta', 'turn');
 const debtsCol = () => collection(db, 'debts');
+const receiptDoc = id => doc(db, 'receipts', id);
 
 function commit(batch, okMsg) {
   batch.commit().then(() => { if (okMsg) toast(okMsg); })
@@ -426,7 +477,11 @@ function askPay() {
   o.addEventListener('click', e => {
     if (e.target === o) { o.remove(); return; }
     const b = e.target.closest('[data-paywith]'); if (!b) return;
-    o.remove(); if (b.dataset.paywith === 'credit') askWho(); else if (b.dataset.paywith) pay(b.dataset.paywith);
+    o.remove();
+    const w = b.dataset.paywith;
+    if (w === 'credit') askWho();
+    else if (w === 'cash') askChange(cartTotal(), r => pay('cash', null, null, r));
+    else if (w === 'transfer') askReceipt(cartTotal(), img => pay('transfer', null, img));
   });
   document.body.appendChild(o);
 }
@@ -448,22 +503,82 @@ function askWho() {
   });
   document.body.appendChild(o); setTimeout(() => { const i = o.querySelector('#whoname'); i && i.focus(); }, 50);
 }
-function pay(method, who) {
+// Calculadora de vueltas: Macarena toca los billetes y monedas que le dieron y la app le dice cuánto devolver
+// (con dibujos de la plata que tiene que devolver).
+function askChange(sum, done) {
+  let given = [];
+  const o = document.createElement('div'); o.className = 'overlay'; o.id = 'askchange';
+  const draw = () => {
+    const g = given.reduce((a, v) => a + v, 0), back = g - sum, cp = changeParts(Math.max(0, back));
+    let res;
+    if (!g) res = `<div class="chg-res wait">👇 Toca la plata que te dieron</div>`;
+    else if (back < 0) res = `<div class="chg-res bad">😮 Falta <b class="num">${fmt(-back)}</b><small>Pídele más plata</small></div>`;
+    else if (back === 0) res = `<div class="chg-res ok">🎉 ¡Exacto! <small>No hay que devolver nada</small></div>`;
+    else res = `<div class="chg-res give"><span>Devuelve</span><b class="num">${fmt(back)}</b>
+      <div class="chg-parts">${cp.parts.map(m => moneyPic(m, true)).join('')}${cp.left ? `<span class="muted num">+ ${fmt(cp.left)}</span>` : ''}</div></div>`;
+    o.innerHTML = `<div class="pinbox paybox chgbox" role="dialog" aria-label="Calculadora de vueltas">
+      <div class="chg-top"><span>Cuesta</span><b class="num">${fmt(sum)}</b></div>
+      <div class="chg-given"><span>Te dio <b class="num">${fmt(g)}</b></span>
+        <div class="chg-tray">${given.length ? given.map((v, n) => `<button data-ungive="${n}" aria-label="Quitar ${fmt(v)}">${moneyPic(MONEY.find(m => m.v === v), true)}</button>`).join('') : '<small class="muted">Aquí sale lo que toques</small>'}</div></div>
+      ${res}
+      <div class="chg-money">${MONEY.map(m => `<button data-give="${m.v}" aria-label="${m.label}: ${fmt(m.v)}">${moneyPic(m)}</button>`).join('')}</div>
+      ${g >= sum ? `<button class="paybtn cash" id="chgok"><span>✅</span>${back > 0 ? 'Ya devolví' : 'Listo'}</button>`
+        : !g ? `<button class="paybtn cash" id="chgexact"><span>👌</span>Me pagó exacto</button>` : ''}
+      <button class="btn ghost big" id="chgback">Volver</button></div>`;
+  };
+  o.addEventListener('click', e => {
+    if (e.target === o || e.target.closest('#chgback')) { o.remove(); askPay(); return; }
+    const gv = e.target.closest('[data-give]'); if (gv) { given.push(+gv.dataset.give); ding(); draw(); return; }
+    const ug = e.target.closest('[data-ungive]'); if (ug) { given.splice(+ug.dataset.ungive, 1); draw(); return; }
+    if (e.target.closest('#chgexact')) { o.remove(); done({ given: sum, back: 0 }); return; }
+    if (e.target.closest('#chgok')) { const g = given.reduce((a, v) => a + v, 0); o.remove(); done({ given: g, back: g - sum }); }
+  });
+  draw(); document.body.appendChild(o);
+}
+// Transferencia: tomarle foto al comprobante que muestra el cliente. Si no se puede, se sigue sin foto.
+function askReceipt(sum, done, back) {
+  let img = null, busy = false;
+  const o = document.createElement('div'); o.className = 'overlay'; o.id = 'askreceipt';
+  const draw = () => {
+    o.innerHTML = `<div class="pinbox paybox" role="dialog" aria-label="Foto del comprobante"><h2>📱 Transferencia</h2>
+      <b class="num paytotal">${fmt(sum)}</b>
+      ${img ? `<img class="rcprev" src="${img}" alt="Foto del comprobante">
+        <button class="paybtn transfer" id="rcok"><span>✅</span>Listo</button>
+        <label class="btn ghost big rcagain">📸 Tomar otra foto<input type="file" id="rcfile" accept="image/*" capture="environment" hidden></label>`
+      : `<p style="margin:0;font-weight:800">Pídele al cliente que te muestre el comprobante y tómale una foto.</p>
+        <label class="paybtn transfer rccam${busy ? ' busy' : ''}"><span>📸</span>${busy ? 'Preparando…' : 'Tomar foto'}<input type="file" id="rcfile" accept="image/*" capture="environment" hidden></label>
+        <button class="btn ghost" id="rcskip">Seguir sin foto</button>`}
+      <button class="btn ghost big" id="rcback">Volver</button></div>`;
+  };
+  o.addEventListener('click', e => {
+    if (e.target === o || e.target.closest('#rcback')) { o.remove(); (back || askPay)(); return; }
+    if (e.target.closest('#rcskip')) { o.remove(); done(null); return; }
+    if (e.target.closest('#rcok')) { o.remove(); done(img); }
+  });
+  o.addEventListener('change', e => {
+    const f = e.target.files && e.target.files[0]; if (!f) return;
+    busy = true; draw();
+    shrinkReceipt(f).then(d => { img = d; busy = false; draw(); }, () => { busy = false; draw(); toast('No se pudo leer esa foto. Intenta otra vez.'); });
+  });
+  draw(); document.body.appendChild(o);
+}
+function pay(method, who, receipt, change) {
   const ci = cartItems(); if (!ci.length) { cart = []; saveCart(); renderKid(); return; }
   const sum = cartTotal(), ticket = uid(), t = Date.now(), counts = new Map();
   const b = writeBatch(db);
   const lines = priceLines(ci);
   if (method === 'credit') b.set(doc(db, 'debts', ticket), { name: who, total: sum, items: lines.map(l => ({ name: l.it.name, emoji: l.it.emoji, price: l.price })), t, by: role, paid: false });
   lines.forEach(({ it, price, promo }) => {
-    b.set(doc(salesCol()), { itemId: it.id, name: it.name, emoji: it.emoji, price, t, by: role, ticket, pay: method, ...(promo ? { promo: true } : {}) });
+    b.set(doc(salesCol()), { itemId: it.id, name: it.name, emoji: it.emoji, price, t, by: role, ticket, pay: method, ...(promo ? { promo: true } : {}), ...(receipt ? { rc: true } : {}) });
     counts.set(it.id, (counts.get(it.id) || 0) + 1);
   });
   counts.forEach((n, id) => b.update(doc(db, 'items', id), { stock: increment(-n) }));
+  if (receipt) b.set(receiptDoc(ticket), { img: receipt, t, by: role });
   commit(b);
   cart = []; saveCart(); cashSound(); renderKid();
   const o = document.createElement('div'); o.className = 'overlay party';
-  o.innerHTML = `<div class="partybox"><div class="big">🎉</div><h2>¡Venta lista!</h2><b class="num">${fmt(sum)}</b><span>${method === 'transfer' ? '📱 Transferencia' : method === 'credit' ? '📝 Fiado: ' + esc(who) : '💵 Billetes'}</span><span class="partyem">${ci.map(i => pic(i)).join(' ')}</span></div>`;
-  o.addEventListener('click', () => o.remove()); document.body.appendChild(o); setTimeout(() => o.remove(), 1800);
+  o.innerHTML = `<div class="partybox"><div class="big">🎉</div><h2>¡Venta lista!</h2><b class="num">${fmt(sum)}</b><span>${method === 'transfer' ? '📱 Transferencia' + (receipt ? ' 🧾' : '') : method === 'credit' ? '📝 Fiado: ' + esc(who) : '💵 Billetes'}</span>${change && change.back > 0 ? `<span class="partyback">Vuelto: <b class="num">${fmt(change.back)}</b></span>` : ''}<span class="partyem">${ci.map(i => pic(i)).join(' ')}</span></div>`;
+  o.addEventListener('click', () => o.remove()); document.body.appendChild(o); setTimeout(() => o.remove(), 2200);
 }
 function showKidDebts() {
   let o = document.getElementById('kiddebts');
@@ -508,11 +623,48 @@ function debtRow(d, kid) {
 }
 function debtPaidRow(d) {
   return `<div class="sale"><span><b>${esc(d.name)}</b> <span class="muted num">· pagó ${d.paidWith === 'transfer' ? '📱' : '💵'} ${hr(d.paidAt)}</span></span>
-    <span class="row" style="gap:4px;flex-wrap:nowrap"><b class="num">${fmt(d.total)}</b>${d.paidWith === 'transfer' ? `<button class="okbtn${d.ok ? ' on' : ''}" data-okdebt="${esc(d.id)}">${d.ok ? '✓ Llegó' : '¿Llegó?'}</button>` : ''}</span></div>`;
+    <span class="row" style="gap:4px;flex-wrap:nowrap"><b class="num">${fmt(d.total)}</b>${d.paidWith === 'transfer' ? `${rcBtn(d.id, d.rc)}<button class="okbtn${d.ok ? ' on' : ''}" data-okdebt="${esc(d.id)}">${d.ok ? '✓ Llegó' : '¿Llegó?'}</button>` : ''}</span></div>`;
 }
-function payDebt(id, w) {
-  const b = writeBatch(db); b.update(doc(db, 'debts', id), { paid: true, paidAt: Date.now(), paidWith: w === 'transfer' ? 'transfer' : 'cash' });
+function payDebt(id, w, receipt) {
+  const d = S.debts.find(x => x.id === id); if (!d || d.paid) return;
+  // Si pagó por transferencia, primero la foto del comprobante.
+  if (w === 'transfer' && receipt === undefined) {
+    const kd = document.getElementById('kiddebts'); if (kd) kd.remove();
+    askReceipt(d.total, img => payDebt(id, 'transfer', img), () => { if (kd) showKidDebts(); });
+    return;
+  }
+  const t = Date.now(), b = writeBatch(db);
+  b.update(doc(db, 'debts', id), { paid: true, paidAt: t, paidWith: w === 'transfer' ? 'transfer' : 'cash', ...(receipt ? { rc: true } : {}) });
+  if (receipt) b.set(receiptDoc(id), { img: receipt, t, by: role });
   commit(b, w === 'transfer' ? 'Fiado pagado por transferencia' : 'Fiado pagado: guarda la plata en la caja'); if (sound) cashSound();
+}
+// Ver la foto del comprobante (solo papás). Se descarga solo cuando la tocan, para no gastar datos.
+function rcBtn(id, has) { return has ? `<button class="rcbtn" data-rc="${esc(id)}" aria-label="Ver comprobante">🧾</button>` : ''; }
+function showReceipt(id) {
+  const o = document.createElement('div'); o.className = 'overlay'; o.id = 'rcview';
+  o.innerHTML = `<div class="pinbox rcbox" role="dialog" aria-label="Comprobante"><h2>🧾 Comprobante</h2><p class="muted" id="rcmsg">Cargando…</p><div class="rcimg"></div>
+    <small class="muted">Toca la foto para verla más grande.</small><button class="btn ghost big" id="rcclose">Cerrar</button></div>`;
+  let un = null;
+  const close = () => { if (un) un(); o.remove(); };
+  o.addEventListener('click', e => {
+    if (e.target === o || e.target.closest('#rcclose')) { close(); return; }
+    if (e.target.tagName === 'IMG') e.target.classList.toggle('zoom');
+  });
+  document.body.appendChild(o);
+  un = onSnapshot(receiptDoc(id), snap => {
+    const m = o.querySelector('#rcmsg'), box = o.querySelector('.rcimg'); if (!m) return;
+    const img = snap.exists() && snap.data().img;
+    if (img && /^data:image\/jpeg;base64,/.test(img)) { m.textContent = 'Recibido ' + dt(snap.data().t); box.innerHTML = `<img src="${img}" alt="Foto del comprobante">`; }
+    else if (!snap.metadata.fromCache) m.textContent = 'Esta foto ya no está guardada.';
+  }, () => { const m = o.querySelector('#rcmsg'); if (m) m.textContent = 'No se pudo cargar. Revisa el internet.'; });
+}
+const RECEIPT_DAYS = 60;
+// Comprobantes del turno (ventas por transferencia y fiados pagados por transferencia) para dejarlos en el historial.
+function turnReceipts() {
+  const out = [];
+  tickets(S.sales).forEach((g, n) => { if (g.sales[0].rc) out.push({ id: g.id, label: 'Venta ' + (n + 1), total: total(g.sales) }); });
+  debtsPaidTurn().forEach(d => { if (d.rc) out.push({ id: d.id, label: 'Fiado ' + d.name, total: d.total }); });
+  return out;
 }
 const cashTotal = sales => total(sales.filter(s => payOf(s) === 'cash'));
 const transferTotal = sales => total(sales.filter(s => payOf(s) === 'transfer'));
@@ -573,7 +725,7 @@ function pHoy() {
   <div class="card"><h2>Cada venta</h2>
     <p class="muted" style="margin:0">Si una venta quedó mal, bórrala aquí. Los productos vuelven al inventario.</p>
     ${tk.length ? tk.map((g, n) => ({ g, n: n + 1 })).reverse().map(({ g, n }) => `<div class="sale"><span><b>Venta ${n}</b> ${payOf(g.sales[0]) === 'transfer' ? '📱' : payOf(g.sales[0]) === 'credit' ? '📝 ' + esc((S.debts.find(d => d.id === g.id) || {}).name || 'Fiado') : '💵'} <span class="muted num">· ${hr(g.t)}${g.by === 'parent' ? ' · papás' : ''}</span><br>${g.sales.map(s => esc(s.emoji)).join(' ')}</span>
-      <span class="row" style="gap:4px;flex-wrap:nowrap">${payOf(g.sales[0]) === 'transfer' ? transferBtn(g) : ''}<b class="num">${fmt(total(g.sales))}</b><button data-delticket="${esc(g.id)}">Borrar</button></span></div>`).join('') : '<p class="muted">Sin ventas.</p>'}
+      <span class="row" style="gap:4px;flex-wrap:nowrap">${payOf(g.sales[0]) === 'transfer' ? rcBtn(g.id, g.sales[0].rc) + transferBtn(g) : ''}<b class="num">${fmt(total(g.sales))}</b><button data-delticket="${esc(g.id)}">Borrar</button></span></div>`).join('') : '<p class="muted">Sin ventas.</p>'}
   </div>`;
 }
 // Conteo de inventario: compara lo que la app espera que quede con lo que hay en físico.
@@ -616,9 +768,9 @@ function pCierre() {
   </div>
   <div class="card">
     <h2>3. Revisa las transferencias</h2>
-    ${tr ? `<p class="muted" style="margin:0">Mira en tu cuenta (Nequi, banco…) que cada una haya llegado y márcala.</p>
+    ${tr ? `<p class="muted" style="margin:0">Mira en tu cuenta (Nequi, banco…) que cada una haya llegado y márcala. Toca 🧾 para ver la foto del comprobante.</p>
       ${tickets(S.sales).map((g, n) => ({ g, n: n + 1 })).filter(({ g }) => payOf(g.sales[0]) === 'transfer').map(({ g, n }) => `<div class="sale"><span><b>Venta ${n}</b> <span class="muted num">· ${hr(g.t)}</span></span>
-        <span class="row" style="gap:6px;flex-wrap:nowrap"><b class="num">${fmt(total(g.sales))}</b>${transferBtn(g)}</span></div>`).join('')}
+        <span class="row" style="gap:6px;flex-wrap:nowrap"><b class="num">${fmt(total(g.sales))}</b>${rcBtn(g.id, g.sales[0].rc)}${transferBtn(g)}</span></div>`).join('')}
       ${dT ? `<p class="muted" style="margin:8px 0 0">Fiados pagados por transferencia:</p>${debtsPaidTurn().filter(d => d.paidWith === 'transfer').map(debtPaidRow).join('')}` : ''}
       <div class="diff ${pend.length + dTp.length ? 'plus' : 'ok'}"><b class="num">${pend.length + dTp.length ? `Faltan por confirmar ${pend.length + dTp.length} = ${fmt(pend.reduce((a, g) => a + total(g.sales), 0) + dTp.reduce((a, d) => a + d.total, 0))}` : `Llegaron todas: ${fmt(tr + dT)}`}</b>
         <span>${pend.length + dTp.length ? 'Si alguna no llegó, revisa con quien vendió antes de cerrar.' : 'Las transferencias cuadran.'}</span></div>`
@@ -800,7 +952,9 @@ function pHist() {
       <tr><td>Se contó</td><td class="r num">${fmt(c.counted)}</td></tr>
       ${(c.items || []).map(r => `<tr><td class="muted">${esc(r.emoji)} ${esc(r.name)} × ${r.qty}</td><td class="r num muted">${fmt(r.sum)}</td></tr>`).join('')}
       ${(c.inventory || []).filter(r => r.missing).map(r => `<tr><td style="color:${r.missing > 0 ? 'var(--bad)' : 'var(--warn)'}">${esc(r.emoji)} ${esc(r.name)}: la app decía ${r.expected}, había ${r.counted}</td><td class="r num" style="color:${r.missing > 0 ? 'var(--bad)' : 'var(--warn)'}">${r.missing > 0 ? '-' + fmt(r.missing * r.price) : '+' + (-r.missing)}</td></tr>`).join('')}
-      </tbody></table></div>${c.note ? `<p class="muted">Nota: ${esc(c.note)}</p>` : ''}</details>`; }).join('')}</div>`;
+      </tbody></table></div>${c.note ? `<p class="muted">Nota: ${esc(c.note)}</p>` : ''}
+      ${(c.receipts || []).length ? `<div class="rclist"><span class="lbl">🧾 Comprobantes</span>${c.receipts.map(r => `<button class="okbtn" data-rc="${esc(r.id)}">${esc(r.label)} · ${fmt(r.total)}</button>`).join('')}</div>` : ''}</details>`; }).join('')}
+    <p class="muted" style="margin:8px 0 0">Las fotos de comprobantes se guardan ${RECEIPT_DAYS} días.</p></div>`;
 }
 
 function oldLocalData() {
@@ -846,9 +1000,9 @@ function pAjustes() {
 
 // Reemplaza todos los datos por los de una copia (formato de la app anterior o de esta).
 async function replaceAll(d, seed) {
-  const [it, sa, cl, de] = await Promise.all([getDocs(itemsCol()), getDocs(salesCol()), getDocs(closingsCol()), getDocs(debtsCol())]);
+  const [it, sa, cl, de, rc] = await Promise.all([getDocs(itemsCol()), getDocs(salesCol()), getDocs(closingsCol()), getDocs(debtsCol()), getDocs(collection(db, 'receipts'))]);
   const ops = [];
-  [it, sa, cl, de].forEach(snap => snap.docs.forEach(x => ops.push(b => b.delete(x.ref))));
+  [it, sa, cl, de, rc].forEach(snap => snap.docs.forEach(x => ops.push(b => b.delete(x.ref))));
   if (seed) { ops.push(...sampleOps()); ops.push(b => b.set(turnDoc(), { start: Date.now(), base: 0 })); }
   else {
     (d.items || []).forEach((i, n) => ops.push(b => b.set(doc(db, 'items', String(i.id || uid())), {
@@ -913,7 +1067,8 @@ app.addEventListener('click', e => {
   if (t.id === 'pay') { askPay(); return; }
   if (t.id === 'kidfiados') { showKidDebts(); return; }
   if (t.dataset.debtpay) { payDebt(t.dataset.debtpay, t.dataset.with); return; }
-  if (role !== 'parent') return; // de aquí en adelante, solo papás
+  if (role !== 'parent') return;
+  if (t.dataset.rc) { showReceipt(t.dataset.rc); return; } // de aquí en adelante, solo papás
   if (t.id === 'toparent') { mode = 'parent'; render(); scrollTo(0, 0); return; }
   if (t.id === 'tokid') { mode = 'kid'; editing = null; confirmKey = null; render(); scrollTo(0, 0); return; }
   if (t.dataset.tab) { tab = t.dataset.tab; editing = null; bulk = null; confirmKey = null; render(); scrollTo(0, 0); return; }
@@ -926,13 +1081,14 @@ app.addEventListener('click', e => {
   }
   if (t.dataset.okdebt) { const d = S.debts.find(x => x.id === t.dataset.okdebt); if (!d) return; const b = writeBatch(db); b.update(doc(db, 'debts', d.id), { ok: !d.ok }); commit(b, d.ok ? 'Marcada como no confirmada' : 'Transferencia confirmada'); return; }
   if (t.dataset.deldebt) { confirmKey = 'deldebt:' + t.dataset.deldebt; render(); return; }
-  if (t.dataset.deldebtyes) { const b = writeBatch(db); b.delete(doc(db, 'debts', t.dataset.deldebtyes)); commit(b, 'Fiado borrado'); confirmKey = null; return; }
+  if (t.dataset.deldebtyes) { const b = writeBatch(db); b.delete(doc(db, 'debts', t.dataset.deldebtyes)); b.delete(receiptDoc(t.dataset.deldebtyes)); commit(b, 'Fiado borrado'); confirmKey = null; return; }
   if (t.dataset.delticket) {
     const g = tickets(S.sales).find(x => x.id === t.dataset.delticket); if (!g) return;
     const b = writeBatch(db), counts = new Map();
     g.sales.forEach(s => { b.delete(doc(db, 'sales', s.id)); if (itemById(s.itemId)) counts.set(s.itemId, (counts.get(s.itemId) || 0) + 1); });
     counts.forEach((n, id) => b.update(doc(db, 'items', id), { stock: increment(n) }));
     if (S.debts.some(d => d.id === g.id && !d.paid)) b.delete(doc(db, 'debts', g.id));
+    if (g.sales.some(s => s.rc)) b.delete(receiptDoc(g.id));
     commit(b, 'Venta borrada'); return;
   }
   if (t.dataset.den) { const d = +t.dataset.den; den[d] = Math.max(0, (den[d] || 0) + +t.dataset.dir); counted = String(denTotal()); render(); return; }
@@ -945,7 +1101,10 @@ app.addEventListener('click', e => {
     const su = invSummary(invRows());
     const pf = profitOf(S.sales);
     b.set(doc(closingsCol()), { ...(pf.withCost ? { profit: pf.profit } : {}), start: turn().start, end: Date.now(), base, sales, expected: base + cash + dC, cashSales: cash, transferSales: tr, transferPending: pendV, creditSales: cr, debtCashPaid: dC, debtTransferPaid: dT, debtsOpen: debtsOpen().reduce((a, d) => a + d.total, 0), counted: countedValue() || 0, count: S.sales.length, items: byItem(S.sales), note,
-      ...(su.counted ? { inventory: su.rows, missUnits: su.missUnits, missValue: su.missValue } : {}) });
+      ...(su.counted ? { inventory: su.rows, missUnits: su.missUnits, missValue: su.missValue } : {}), receipts: turnReceipts() });
+    // Las fotos de comprobantes se guardan 60 días; después se borran solas para no llenar Firebase.
+    S.closings.filter(c => c.end < Date.now() - RECEIPT_DAYS * 864e5 && (c.receipts || []).length).slice(0, 20).forEach(c => {
+      c.receipts.forEach(r => b.delete(receiptDoc(r.id))); b.update(doc(db, 'closings', c.id), { receipts: [] }); });
     // El inventario de la app queda igual a lo contado.
     su.rows.forEach(r => { if (r.missing !== 0) b.update(doc(db, 'items', r.itemId), { stock: r.counted }); });
     S.sales.forEach(s => b.delete(doc(db, 'sales', s.id)));
