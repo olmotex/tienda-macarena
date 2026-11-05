@@ -322,6 +322,7 @@ const ready = () => S.loaded.items && S.loaded.sales && S.loaded.turn;
 
 // ---------- INICIO / LOGIN ----------
 const WHO = { kid: { icon: '👧', name: 'Soy Macarena', sub: 'Para vender en la tienda' }, parent: { icon: '👪', name: 'Somos los papás', sub: 'Productos, precios, cierres e historial' } };
+let homeOpts = false;
 function renderHome() {
   app.innerHTML = `
   <div class="login">
@@ -331,7 +332,10 @@ function renderHome() {
     ${ROLES.map(r => { const w = WHO[r], saved = !!sessions[r], lk = !!lockOf(r);
       return `<button class="who" data-who="${r}"><span>${w.icon}</span><b>${w.name}</b>
         <small>${saved ? (lk ? '🔓 Entrar con Face ID o huella' : '✓ Sesión guardada · Entrar') : w.sub}</small></button>`; }).join('')}
-    ${ROLES.some(r => sessions[r]) ? `<details class="more"><summary class="muted">Cerrar sesiones guardadas</summary>
+    ${ROLES.some(r => sessions[r]) ? `<details class="more" ${homeOpts ? 'open' : ''}><summary class="muted">Opciones: Face ID y sesiones</summary>
+      ${sessions.kid ? (lockOf('kid')
+        ? '<button class="btn ghost" id="kidlockoff">Macarena entra directo (sin Face ID)</button>'
+        : '<button class="btn ghost" id="kidlockon">Pedir Face ID o huella a Macarena</button>') : ''}
       ${ROLES.filter(r => sessions[r]).map(r => `<button class="btn ghost" data-logout="${r}">Cerrar sesión de ${r === 'kid' ? 'Macarena' : 'los papás'}</button>`).join('')}
     </details>` : ''}
   </div>`;
@@ -1079,6 +1083,9 @@ app.addEventListener('click', e => {
   if (t.id === 'lockyes' || t.id === 'lockon') { const r = t.id === 'lockon' ? 'parent' : pendingRole;
     createLock(r).then(() => { toast('Listo: Face ID o huella activado'); if (t.id === 'lockyes') activate(r); else render(); },
       err => { console.warn(err); toast('No se pudo activar. Puedes hacerlo luego.'); if (t.id === 'lockyes') activate(r); }); return; }
+  if (t.id === 'kidlockoff') { lsSet(LOCK_KEY + 'kid', null); homeOpts = true; render(); toast('Listo: Macarena entra directo'); return; }
+  if (t.id === 'kidlockon') { createLock('kid').then(() => { homeOpts = true; render(); toast('Listo: Macarena entra con Face ID o huella'); },
+      err => { console.warn(err); toast('No se pudo activar en este celular'); }); return; }
   if (t.id === 'lockno') { activate(pendingRole); return; }
   if (t.id === 'lockoff') { lsSet(LOCK_KEY + 'parent', null); render(); toast('Desactivado'); return; }
   if (t.id === 'reload') { location.reload(); return; }
