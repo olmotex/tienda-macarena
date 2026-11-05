@@ -643,7 +643,8 @@ function debtRow(d, kid) {
 }
 function debtPaidRow(d) {
   return `<div class="sale"><span><b>${esc(d.name)}</b> <span class="muted num">· pagó ${d.paidWith === 'transfer' ? '📱' : '💵'} ${hr(d.paidAt)}</span></span>
-    <span class="row" style="gap:4px;flex-wrap:nowrap"><b class="num">${fmt(d.total)}</b>${d.paidWith === 'transfer' ? `${rcBtn(d.id, d.rc)}<button class="okbtn${d.ok ? ' on' : ''}" data-okdebt="${esc(d.id)}">${d.ok ? '✓ Llegó' : '¿Llegó?'}</button>` : ''}</span></div>`;
+    <span class="row" style="gap:4px;flex-wrap:nowrap"><b class="num">${fmt(d.total)}</b>${d.paidWith === 'transfer' ? `${rcBtn(d.id, d.rc)}<button class="okbtn${d.ok ? ' on' : ''}" data-okdebt="${esc(d.id)}">${d.ok ? '✓ Llegó' : '¿Llegó?'}</button>` : ''}
+    ${confirmKey === 'deldebt:' + d.id ? `<button class="btn danger" data-deldebtyes="${esc(d.id)}">¿Borrar?</button>` : `<button data-deldebt="${esc(d.id)}">Borrar</button>`}</span></div>`;
 }
 function payDebt(id, w, receipt) {
   const d = S.debts.find(x => x.id === id); if (!d || d.paid) return;
@@ -1107,7 +1108,7 @@ app.addEventListener('click', e => {
     const b = writeBatch(db), counts = new Map();
     g.sales.forEach(s => { b.delete(doc(db, 'sales', s.id)); if (itemById(s.itemId)) counts.set(s.itemId, (counts.get(s.itemId) || 0) + 1); });
     counts.forEach((n, id) => b.update(doc(db, 'items', id), { stock: increment(n) }));
-    if (S.debts.some(d => d.id === g.id && !d.paid)) b.delete(doc(db, 'debts', g.id));
+    if (S.debts.some(d => d.id === g.id)) { b.delete(doc(db, 'debts', g.id)); b.delete(receiptDoc(g.id)); }
     if (g.sales.some(s => s.rc)) b.delete(receiptDoc(g.id));
     commit(b, 'Venta borrada'); return;
   }
