@@ -1,6 +1,6 @@
 // Guarda la app en el celular para que abra rápido y funcione aunque se caiga el internet.
 // Al publicar cambios, sube el número de versión para que los celulares los reciban.
-const CACHE = 'tienda-v18';
+const CACHE = 'tienda-v19';
 const FILES = ['./', './index.html', './styles.css', './app.js', './firebase-config.js', './vendor/firebase.js',
   './manifest.webmanifest', './icons/icon-192.png', './icons/apple-touch-icon.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting())); });
