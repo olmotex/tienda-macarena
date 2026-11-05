@@ -261,3 +261,7 @@ img.ph{display:block;width:100%;height:100%;object-fit:cover;border-radius:inher
 .rcimg img.zoom{width:220%;cursor:zoom-out}
 .rclist{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:8px}
 .rclist .okbtn{border-color:var(--line);color:var(--ink)!important}
+/* Revisar la venta antes de guardarla */
+.cfitems{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;max-height:30vh;overflow:auto}
+.cfhow{font-family:var(--display);font-weight:800;font-size:1.3rem}
+.paybtn.cffix{background:#ffd59e}
